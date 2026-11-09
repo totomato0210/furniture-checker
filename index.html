@@ -1157,7 +1157,7 @@ function openDlg(type, shape, on) {
   const cur = selObj();
   Object.assign(dlg, {
     type, shape: shape || 'rect', nameDirty: false, sizeDirty: false,
-    on: on || (cur ? (isItem(cur) ? cur.on : cur.id) : '') || r.furniture[0].id,
+    on: on || (cur ? (isItem(cur) ? cur.on : cur.id) : '') || (r.furniture[0] ? r.furniture[0].id : ''),   // 家具0件(空の部屋)でも開けるように
   });
   applyDlgDefaults();
   renderDlg();
