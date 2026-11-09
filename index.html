@@ -382,27 +382,28 @@ function normalize(d) {
     gapIgnore: num(s.gapIgnore, DEFAULT_SETTINGS.gapIgnore, ...LIM.gapIgnore),
   };
   const oneOf = (v, list, def) => (list.includes(v) ? v : def);
+  const objs = (v) => (Array.isArray(v) ? v : []).filter((o) => o && typeof o === 'object');   // null など要素でないものは読み飛ばす
   const rooms = d.rooms.map((r, i) => {
     r = r || {};
     const room = {
       id: str(r.id, 'r' + (i + 1)), name: str(r.name, '部屋'),
       width: num(r.width, 360, ...LIM['room.width']), depth: num(r.depth, 270, ...LIM['room.depth']),
-      fixtures: (Array.isArray(r.fixtures) ? r.fixtures : []).map((o) => ({
+      fixtures: objs(r.fixtures).map((o) => ({
         id: str(o && o.id, ''), name: str(o && o.name, '固定物'),
         x: num(o && o.x, 0, ...LIM.x), y: num(o && o.y, 0, ...LIM.y), w: num(o && o.w, 30, ...LIM.w), d: num(o && o.d, 30, ...LIM.d),
       })),
-      doors: (Array.isArray(r.doors) ? r.doors : []).map((o) => ({
+      doors: objs(r.doors).map((o) => ({
         id: str(o && o.id, ''), wall: oneOf(o && o.wall, WALLS, 'bottom'),
         offset: num(o && o.offset, 0, ...LIM.offset), width: num(o && o.width, 80, ...LIM['doors.width']),
         type: oneOf(o && o.type, ['swing', 'sliding'], 'swing'),
         hinge: oneOf(o && o.hinge, ['left', 'right'], 'left'), opens: oneOf(o && o.opens, ['in', 'out'], 'in'),
       })),
-      windows: (Array.isArray(r.windows) ? r.windows : []).map((o) => ({
+      windows: objs(r.windows).map((o) => ({
         id: str(o && o.id, ''), wall: oneOf(o && o.wall, WALLS, 'top'),
         offset: num(o && o.offset, 0, ...LIM.offset), width: num(o && o.width, 100, ...LIM['windows.width']),
         sill: num(o && o.sill, 90, ...LIM.sill),
       })),
-      furniture: (Array.isArray(r.furniture) ? r.furniture : []).map((o) => withShape({
+      furniture: objs(r.furniture).map((o) => withShape({
         id: str(o && o.id, ''), name: str(o && o.name, '家具'),
         x: num(o && o.x, 0, ...LIM.x), y: num(o && o.y, 0, ...LIM.y),
         w: num(o && o.w, 60, ...LIM.w), d: num(o && o.d, 60, ...LIM.d), h: num(o && o.h, 60, ...LIM.h),
@@ -410,7 +411,7 @@ function normalize(d) {
         front: num(o && o.front, 0, ...LIM.front),
         color: /^#[0-9a-fA-F]{6}$/.test(o && o.color) ? o.color : '#8fb3d9',
       }, o && o.shape)),
-      items: (Array.isArray(r.items) ? r.items : []).map((o) => withShape({
+      items: objs(r.items).map((o) => withShape({
         id: str(o && o.id, ''), name: str(o && o.name, '小物'), on: str(o && o.on, ''),
         x: num(o && o.x, 0, ...LIM.x), y: num(o && o.y, 0, ...LIM.y),
         w: num(o && o.w, 20, ...LIM.w), d: num(o && o.d, 20, ...LIM.d), h: num(o && o.h, 10, ...LIM.h),
@@ -1150,6 +1151,8 @@ function dlgDefaults() {
   if (dlg.type === 'item') return { rect: [20, 15, 15], circle: [20, 20, 15], ellipse: [25, 15, 15] }[dlg.shape];
   return { rect: [60, 60, 60], circle: [90, 90, 70], ellipse: [120, 80, 70] }[dlg.shape];
 }
+/** ダイアログの寸法(cm)。空欄なら既定値を使う(Number('') は 0 になるので先に判定する)。i は dlgDefaults の位置 */
+const dlgSize = (k, i) => round1(num(String(dlg[k]).trim() === '' ? NaN : dlg[k], dlgDefaults()[i], ...LIM[k]));
 const dlgDefaultName = () => (dlg.type === 'item' ? '小物' : { rect: '家具', circle: '丸テーブル', ellipse: '楕円テーブル' }[dlg.shape]);
 function openDlg(type, shape, on) {
   if (state.mode !== 'edit') return;
@@ -1173,7 +1176,7 @@ function applyDlgDefaults() {
   if (dlg.shape === 'circle') dlg.d = dlg.w;
 }
 function dlgPreview() {
-  const w = Math.max(1, Number(dlg.w) || 1), d = dlg.shape === 'circle' ? w : Math.max(1, Number(dlg.d) || 1);
+  const w = dlgSize('w', 0), d = dlg.shape === 'circle' ? w : dlgSize('d', 1);
   const k = Math.min(150 / w, 66 / d), pw = w * k, ph = d * k;
   const at = `x="${100 - pw / 2}" y="${40 - ph / 2}" width="${pw}" height="${ph}"`;
   const body = dlg.shape === 'rect'
@@ -1226,8 +1229,7 @@ dlgEl.addEventListener('click', (e) => { if (e.target === dlgEl) closeDlg(); });
 function createFromDlg() {
   if (state.mode !== 'edit') return;
   const r = room(), circle = dlg.shape === 'circle', item = dlg.type === 'item';
-  const dflt = dlgDefaults();
-  const w = round1(num(dlg.w, dflt[0], ...LIM.w)), d = circle ? w : round1(num(dlg.d, dflt[1], ...LIM.d)), h = round1(num(dlg.h, dflt[2], ...LIM.h));
+  const w = dlgSize('w', 0), d = circle ? w : dlgSize('d', 1), h = dlgSize('h', 2);
   const name = dlg.name.trim() || dlgDefaultName();
   closeDlg();
   let o;
@@ -1534,6 +1536,15 @@ function lookup(col, id) {
   if (col === 'settings') return state.data.settings;
   return (r[col] || []).find((o) => o.id === id);
 }
+/** ドア・窓を壁の長さに収める。部屋を縮めたときに使う。変更があれば true */
+function fitOpenings(r) {
+  let moved = false;
+  for (const o of [...r.doors, ...r.windows]) {
+    const len = wallLen(r, o.wall), width = Math.min(o.width, len), offset = clamp(o.offset, 0, Math.max(0, len - width));
+    if (width !== o.width || offset !== o.offset) { o.width = width; o.offset = offset; moved = true; }
+  }
+  return moved;
+}
 function applyField(t, commit) {
   if (state.mode !== 'edit') return;
   const { col, id, key } = t.dataset;
@@ -1564,7 +1575,10 @@ function applyField(t, commit) {
   }
   if (col === 'room') {
     if (key === 'name') updateChrome();
-    else fitView();
+    else {
+      if (commit && fitOpenings(obj)) rerender = true;   // 入力途中の値では動かさず、確定時だけ収める
+      fitView();
+    }
   }
   if (col === 'settings' && commit && key === 'aisleTight' && obj.aisleTight > obj.aisleMin) { obj.aisleMin = obj.aisleTight; rerender = true; }
   changed({ panel: 'none' });
@@ -1908,7 +1922,7 @@ $('#fileIn').addEventListener('change', (e) => {
 document.addEventListener('keydown', (e) => {
   if (dlgEl.classList.contains('show')) {
     if (e.key === 'Escape') closeDlg();
-    else if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); createFromDlg(); }
+    else if (e.key === 'Enter' && e.target.tagName === 'INPUT' && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); createFromDlg(); }   // 日本語入力の確定Enterでは追加しない(229はSafari対策)
     return;
   }
   const tag = (e.target.tagName || '').toLowerCase();
