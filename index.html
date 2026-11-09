@@ -99,6 +99,7 @@ h3:first-child{margin-top:0}
 .witem.yel{border-left:6px solid var(--yel)!important}
 .good{color:var(--ok);font-weight:700}
 .warnbox{margin-top:8px;padding:8px;border-radius:8px;background:#fff7e0;border:1px solid #f0d58a;font-size:14px}
+#selWarn:empty{display:none}
 .urlbox{width:100%;height:44px;padding:0 8px;font-size:16px;border:1px solid #b7bcc4;border-radius:8px}
 fieldset{border:0;padding:0;margin:0;min-width:0}
 
@@ -1326,7 +1327,7 @@ function fld(label, col, id, key, val, o = {}) {
   return `<label class="fld ${o.cls || ''}"><span>${label}</span><input type="${t}" ${extra} data-col="${col}" data-id="${esc(id)}" data-key="${key}" value="${esc(val)}" autocomplete="off"></label>`;
 }
 function sel(label, col, id, key, val, opts, cls = '') {
-  return `<label class="fld ${cls}"><span>${label}</span><select data-col="${col}" data-id="${esc(id)}" data-key="${key}">${opts.map(([v, l]) => `<option value="${v}" ${v === val ? 'selected' : ''}>${l}</option>`).join('')}</select></label>`;
+  return `<label class="fld ${cls}"><span>${label}</span><select data-col="${col}" data-id="${esc(id)}" data-key="${key}">${opts.map(([v, l]) => `<option value="${esc(v)}" ${v === val ? 'selected' : ''}>${l}</option>`).join('')}</select></label>`;
 }
 const WALL_OPTS = WALLS.map((w) => [w, WALL_LABEL[w] + 'の壁']);
 
@@ -1349,7 +1350,9 @@ const padsHtml = () => `<div class="pads">
       <div class="padwrap"><small>1cm 移動</small>${padHtml(1)}</div>
       <div class="padwrap"><small>10cm 移動</small>${padHtml(10)}</div>
     </div>`;
-const warnBoxOf = (id) => {
+/** 選択中の家具・小物の警告欄。移動中も syncInputs が中身(warnBoxInner)を更新する */
+const warnBoxOf = (id) => `<div id="selWarn">${warnBoxInner(id)}</div>`;
+const warnBoxInner = (id) => {
   const mine = state.warns.filter((w) => w.ids.includes(id));
   return mine.length ? `<div class="warnbox">${mine.map((w) => `${w.level === 'red' ? '✕' : '▲'} ${esc(w.text)}`).join('<br>')}</div>` : '';
 };
@@ -1574,6 +1577,8 @@ panelBody.addEventListener('change', (e) => { if (e.target.dataset && e.target.d
 function syncInputs() {
   const f = selObj();
   if (!f || state.tab !== 'furn') return;
+  const wb = $('#selWarn');
+  if (wb) wb.innerHTML = warnBoxInner(f.id);
   panelBody.querySelectorAll('[data-col="furniture"],[data-col="items"]').forEach((inp) => {
     if (inp === document.activeElement || inp.dataset.id !== f.id) return;
     const v = String(f[inp.dataset.key]);
@@ -1910,6 +1915,7 @@ document.addEventListener('keydown', (e) => {
   if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
   const f = selObj();
   if (!f || state.mode !== 'edit') return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;   // Ctrl+R(再読み込み)などブラウザのショートカットを横取りしない
   const n = e.shiftKey ? 10 : 1;
   switch (e.key) {
     case 'ArrowLeft': nudge(-n, 0); break;
