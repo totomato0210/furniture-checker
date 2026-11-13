@@ -208,6 +208,9 @@ const SHAPES = ['rect', 'circle', 'ellipse'];
 const SHAPE_LABEL = { rect: '四角形', circle: '円', ellipse: '楕円' };
 const SHAPE_OPTS = SHAPES.map((k) => [k, SHAPE_LABEL[k]]);
 const PREF_KEY = 'furniture-checker.prefs.v1';
+const ROOM_SHAPE_OPTS = [['rect', '長方形'], ['tri', '直角三角形']];
+const CORNERS = ['tl', 'tr', 'bl', 'br'];
+const CORNER_LABEL = { tl: '左上', tr: '右上', bl: '左下', br: '右下' };
 
 const LIM = {
   'room.width': [50, 3000], 'room.depth': [50, 3000],
@@ -325,7 +328,7 @@ function sampleData() {
     version: 1,
     settings: { ...DEFAULT_SETTINGS },
     rooms: [{
-      id: 'r1', name: '洋室', width: 360, depth: 270,
+      id: 'r1', name: '洋室', width: 360, depth: 270, shape: 'rect', corner: 'tl',
       fixtures: [{ id: 'f1', name: '柱', x: 0, y: 0, w: 30, d: 30 }],
       doors: [{ id: 'd1', wall: 'bottom', offset: 20, width: 80, type: 'swing', hinge: 'left', opens: 'in' }],
       windows: [{ id: 'w1', wall: 'top', offset: 100, width: 160, sill: 90 }],
@@ -346,7 +349,7 @@ function sampleData() {
 function emptyData(settings) {
   return {
     version: 1, settings: { ...(settings || DEFAULT_SETTINGS) },
-    rooms: [{ id: 'r1', name: '新しい部屋', width: 360, depth: 270, fixtures: [], doors: [], windows: [], furniture: [], items: [] }],
+    rooms: [{ id: 'r1', name: '新しい部屋', width: 360, depth: 270, shape: 'rect', corner: 'tl', fixtures: [], doors: [], windows: [], furniture: [], items: [] }],
   };
 }
 
@@ -388,6 +391,8 @@ function normalize(d) {
     const room = {
       id: str(r.id, 'r' + (i + 1)), name: str(r.name, '部屋'),
       width: num(r.width, 360, ...LIM['room.width']), depth: num(r.depth, 270, ...LIM['room.depth']),
+      // 部屋の形。省略時(旧データ)は長方形。三角形は直角三角形で、width・depth が直角をはさむ2辺、corner が直角の位置
+      shape: oneOf(r.shape, ['rect', 'tri'], 'rect'), corner: oneOf(r.corner, CORNERS, 'tl'),
       fixtures: objs(r.fixtures).map((o) => ({
         id: str(o && o.id, ''), name: str(o && o.name, '固定物'),
         x: num(o && o.x, 0, ...LIM.x), y: num(o && o.y, 0, ...LIM.y), w: num(o && o.w, 30, ...LIM.w), d: num(o && o.d, 30, ...LIM.d),
@@ -424,6 +429,7 @@ function normalize(d) {
     // 載せる家具が見つからない小物は表示できないため取り除く
     const fids = new Set(room.furniture.map((f) => f.id));
     room.items = room.items.filter((it) => fids.has(it.on));
+    fixOpeningWalls(room);   // 三角形で存在しない壁にあるドア・窓は向かいの壁へ
     return room;
   });
   return { version: 1, settings, rooms };
@@ -478,6 +484,89 @@ function frontRect(f) {
   }
 }
 function wallLen(r, wall) { return wall === 'top' || wall === 'bottom' ? r.width : r.depth; }
+
+/* ---- 部屋の形(長方形 / 直角三角形) ---- */
+const isTri = (r) => r.shape === 'tri';
+/** 部屋の多角形。どの形も同じ向き(面積が正)に頂点を並べる。三角形は corner が直角の位置 */
+function roomPoly(r) {
+  const W = r.width, D = r.depth;
+  if (!isTri(r)) return [{ x: 0, y: 0 }, { x: W, y: 0 }, { x: W, y: D }, { x: 0, y: D }];
+  return {
+    tl: [{ x: 0, y: 0 }, { x: W, y: 0 }, { x: 0, y: D }],
+    tr: [{ x: 0, y: 0 }, { x: W, y: 0 }, { x: W, y: D }],
+    bl: [{ x: 0, y: 0 }, { x: W, y: D }, { x: 0, y: D }],
+    br: [{ x: W, y: 0 }, { x: W, y: D }, { x: 0, y: D }],
+  }[r.corner] || [{ x: 0, y: 0 }, { x: W, y: 0 }, { x: 0, y: D }];
+}
+const polyD = (p) => `M${p.map((q) => `${q.x} ${q.y}`).join('L')}Z`;
+/** 部屋の辺。u は向き(単位ベクトル)、n は部屋の内側を向く法線 */
+function roomEdges(r) {
+  const p = roomPoly(r);
+  return p.map((a, i) => {
+    const b = p[(i + 1) % p.length], len = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+    const u = { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
+    return { a, b, u, n: { x: -u.y, y: u.x }, len };
+  });
+}
+/** 存在する壁(ドア・窓を置ける壁)。三角形は直角をはさむ2辺だけ */
+function roomWalls(r) {
+  if (!isTri(r)) return WALLS;
+  return { tl: ['top', 'left'], tr: ['top', 'right'], bl: ['bottom', 'left'], br: ['bottom', 'right'] }[r.corner] || ['top', 'left'];
+}
+/** 斜めの壁(三角形のときだけ)。c は「内側の法線方向の位置」で、点 p の壁からの距離は n·p − c */
+function hypOf(r) {
+  if (!isTri(r)) return null;
+  const e = roomEdges(r).find((o) => Math.abs(o.u.x) > EPS && Math.abs(o.u.y) > EPS);
+  return e ? { ...e, c: e.n.x * e.a.x + e.n.y * e.a.y } : null;
+}
+const hypLen = (r) => Math.hypot(r.width, r.depth);
+/** 点が部屋の内側か(凸多角形なので、すべての辺の内側にあれば内側) */
+function inRoom(p, r, tol = EPS) {
+  return roomEdges(r).every((e) => e.n.x * (p.x - e.a.x) + e.n.y * (p.y - e.a.y) >= -tol);
+}
+/** 図形(四角形 or 円・楕円)が斜めの壁にいちばん近づく点と、そこから壁までの距離 */
+function nearestToHyp(o, hp) {
+  let p;
+  if (o.round) {
+    const a = o.w / 2, b = o.d / 2, k = Math.hypot(a * hp.n.x, b * hp.n.y) || 1;
+    p = { x: (o.x0 + o.x1) / 2 - a * a * hp.n.x / k, y: (o.y0 + o.y1) / 2 - b * b * hp.n.y / k };
+  } else {
+    p = [{ x: o.x0, y: o.y0 }, { x: o.x1, y: o.y0 }, { x: o.x1, y: o.y1 }, { x: o.x0, y: o.y1 }]
+      .reduce((m, q) => (hp.n.x * q.x + hp.n.y * q.y < hp.n.x * m.x + hp.n.y * m.y ? q : m));
+  }
+  const dist = hp.n.x * p.x + hp.n.y * p.y - hp.c;
+  const t = hp.u.x * (p.x - hp.a.x) + hp.u.y * (p.y - hp.a.y);   // 壁の始点から足までの長さ
+  return { p, dist, foot: { x: p.x - hp.n.x * dist, y: p.y - hp.n.y * dist }, onWall: t >= 0 && t <= hp.len };
+}
+/** 長方形 b が部屋に収まっているか */
+function boxInRoom(b, r) {
+  if (!isTri(r)) return !(b.x0 < -EPS || b.y0 < -EPS || b.x1 > r.width + EPS || b.y1 > r.depth + EPS);
+  return [{ x: b.x0, y: b.y0 }, { x: b.x1, y: b.y0 }, { x: b.x1, y: b.y1 }, { x: b.x0, y: b.y1 }].every((p) => inRoom(p, r));
+}
+/** 図形の多角形のうち、部屋の外に出ている部分(辺ごとの外側の半平面で切り抜く) */
+function outsideParts(poly, r) {
+  const B = 1e4, out = [];
+  for (const e of roomEdges(r)) {
+    const a = { x: e.a.x - e.u.x * B, y: e.a.y - e.u.y * B }, b = { x: e.b.x + e.u.x * B, y: e.b.y + e.u.y * B };
+    const half = [a, b, { x: b.x - e.n.x * B, y: b.y - e.n.y * B }, { x: a.x - e.n.x * B, y: a.y - e.n.y * B }];
+    const p = clipPoly(poly, half);
+    if (p.length >= 3 && Math.abs(polyArea(p)) >= 0.05) out.push({ poly: p });
+  }
+  return out;
+}
+/** 存在しない壁にあるドア・窓を向かいの壁へ移し、壁の長さに収める。動かしたら true */
+const OPP_WALL = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' };
+function fixOpeningWalls(r) {
+  const ws = roomWalls(r);
+  let moved = false;
+  for (const o of [...r.doors, ...r.windows]) if (!ws.includes(o.wall)) { o.wall = OPP_WALL[o.wall]; moved = true; }
+  return fitOpenings(r) || moved;
+}
+/** 寸法ラベルを出す辺(三角形では実際にある辺の外側) */
+function labelSides(r) {
+  const c = isTri(r) ? r.corner : 'tl';
+  return { h: c[0] === 't' ? 'top' : 'bottom', v: c[1] === 'l' ? 'left' : 'right' };
+}
 
 /** ドアの幾何。hinge:'left' は壁の始点側(左端/上端)、'right' は終点側(右端/下端) */
 function doorGeom(r, dr) {
@@ -548,12 +637,13 @@ function windowBand(r, w) {
 }
 function wallBoxes(r) {
   const B = 1e4;
-  return [
-    { name: '上の壁', kind: 'wall', ...box(-B, -B, 2 * B, B) },
-    { name: '下の壁', kind: 'wall', ...box(-B, r.depth, 2 * B, B) },
-    { name: '左の壁', kind: 'wall', ...box(-B, -B, B, 2 * B) },
-    { name: '右の壁', kind: 'wall', ...box(r.width, -B, B, 2 * B) },
-  ];
+  const all = {
+    top: { name: '上の壁', kind: 'wall', ...box(-B, -B, 2 * B, B) },
+    bottom: { name: '下の壁', kind: 'wall', ...box(-B, r.depth, 2 * B, B) },
+    left: { name: '左の壁', kind: 'wall', ...box(-B, -B, B, 2 * B) },
+    right: { name: '右の壁', kind: 'wall', ...box(r.width, -B, B, 2 * B) },
+  };
+  return roomWalls(r).map((w) => all[w]);   // 三角形では存在しない壁(斜めの壁の先)を判定に使わない
 }
 function obstacles(r, excludeId) {
   const out = [];
@@ -580,6 +670,15 @@ function computeWarnings() {
 
   // 重なり: 壁(はみ出し)
   for (const { f, r: fr } of F) {
+    if (isTri(r)) {
+      // 三角形: 輪郭の頂点が1つでも外に出ていれば、はみ出し部分を斜線で示す
+      const poly = polyOf(fr);
+      if (poly.some((p) => !inRoom(p, r, 0.01))) {
+        const shapes = outsideParts(poly, r);
+        if (shapes.length) add({ level: 'red', kind: 'overlap', ids: [f.id], rect: fr, shapes, text: `${f.name}が部屋からはみ出しています` });
+      }
+      continue;
+    }
     if (fr.x0 < -EPS || fr.y0 < -EPS || fr.x1 > W + EPS || fr.y1 > D + EPS) {
       const shapes = [];
       if (fr.x0 < 0) shapes.push(box(fr.x0, fr.y0, Math.min(0, fr.x1) - fr.x0, fr.d));
@@ -594,6 +693,12 @@ function computeWarnings() {
     for (let j = i + 1; j < F.length; j++) {
       const c = shapeInter(F[i].r, F[j].r);
       if (c) add({ level: 'red', kind: 'overlap', ids: [F[i].f.id, F[j].f.id], rect: c.rect, shapes: [hitShape(c)], text: `${F[i].f.name}と${F[j].f.name}が重なっています` });
+    }
+  }
+  // 三角形: 固定物が部屋の外に出ている(形・直角の位置を変えたときなど)
+  if (isTri(r)) {
+    for (const b of FX) if (!boxInRoom(b.r, r)) {
+      add({ level: 'yellow', kind: 'fixture', ids: [], rect: b.r, shapes: [b.r], text: `${b.x.name}が部屋の外に出ています(位置を確認してください)` });
     }
   }
   // 重なり: 家具と固定物
@@ -620,7 +725,7 @@ function computeWarnings() {
     for (const b of F) if (b.f !== a.f && shapeInter(fr, b.r)) causes.push(b.f.name);
     for (const b of FX) if (inter(fr, b.r)) causes.push(b.x.name);
     for (const s of swings) if (sectorHitsRect(s.g, fr)) causes.push(`ドア${s.i + 1}の開閉範囲`);
-    if (fr.x0 < -EPS || fr.y0 < -EPS || fr.x1 > W + EPS || fr.y1 > D + EPS) causes.push('壁');
+    if (!boxInRoom(fr, r)) causes.push('壁');
     if (causes.length) {
       add({ level: 'yellow', kind: 'front', ids: [a.f.id], rect: fr, shapes: [fr], text: `${a.f.name}の前方スペース(${fmt(a.f.front)}cm)が${[...new Set(causes)].join('・')}にかかっています` });
     }
@@ -720,6 +825,28 @@ function aisleWarnings(r, S, out, add) {
       }
     }
   }
+  diagAisleWarnings(r, S, add);
+}
+
+/** 三角形の斜めの壁と、家具・固定物とのすき間。いちばん近づく点から壁への垂線で測る */
+function diagAisleWarnings(r, S, add) {
+  const hp = hypOf(r);
+  if (!hp) return;
+  const obs = obstacles(r), TH = 16;
+  for (const O of obs) {
+    const q = nearestToHyp(O, hp), gap = q.dist;
+    if (!q.onWall || !(gap > S.gapIgnore + EPS && gap < S.aisleMin - EPS)) continue;
+    const hx = hp.u.x * TH / 2, hy = hp.u.y * TH / 2, p = q.p, f = q.foot;
+    const band = [{ x: p.x - hx, y: p.y - hy }, { x: p.x + hx, y: p.y + hy }, { x: f.x + hx, y: f.y + hy }, { x: f.x - hx, y: f.y - hy }];
+    // 間に別の家具・固定物があれば、そこは通路ではないので判定しない
+    if (obs.some((C) => C !== O && (() => { const c = clipPoly(polyOf(C), band); return c.length >= 3 && Math.abs(polyArea(c)) >= 0.05; })())) continue;
+    const red = gap < S.aisleTight - EPS;
+    add({
+      level: red ? 'red' : 'yellow', kind: 'aisle', ids: O.kind === 'furn' ? [O.id] : [], rect: polyBox(band), shapes: [{ poly: band }],
+      label: `${fmt(gap)}`,
+      text: `${O.name}と斜めの壁のすき間 ${fmt(gap)}cm${red ? '(通れません)' : '(横向きでやっと)'}`,
+    });
+  }
 }
 
 function recompute() {
@@ -781,6 +908,11 @@ function neighborLines(f) {
     }
     if (best) res.push({ g: best.g, line: dir.mk(best.O, best.m) });
   }
+  const hp = hypOf(r);
+  if (hp) {   // 三角形: 斜めの壁までの距離(垂線)
+    const q = nearestToHyp(R, hp);
+    if (q.onWall && q.dist > 0) res.push({ g: q.dist, line: [q.p.x, q.p.y, q.foot.x, q.foot.y] });
+  }
   return res;
 }
 
@@ -791,7 +923,8 @@ function planMarkup(o) {
   const r = room(), s = view.s, inv = 1 / s, W = r.width, D = r.depth;
   const pr = !!o.print, P = o.idp || '', txt = !state.hideText, showW = !state.hideWarn;
   const hatch = (id, col, bg) => `<pattern id="${P}${id}" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="scale(${inv}) rotate(45)"><rect width="8" height="8" fill="${bg}"/><line x1="0" y1="0" x2="0" y2="8" stroke="${col}" stroke-width="3"/></pattern>`;
-  let h = `<defs>${hatch('hR', RED, 'rgba(211,47,47,.2)')}${hatch('hY', YEL, 'rgba(230,149,0,.22)')}${hatch('hF', '#8a8f98', '#cfd3d9')}</defs>`;
+  const floorD = polyD(roomPoly(r));
+  let h = `<defs>${hatch('hR', RED, 'rgba(211,47,47,.2)')}${hatch('hY', YEL, 'rgba(230,149,0,.22)')}${hatch('hF', '#8a8f98', '#cfd3d9')}<clipPath id="${P}floor"><path d="${floorD}"/></clipPath></defs>`;
   h += `<g transform="translate(${view.tx} ${view.ty}) scale(${s})">`;
   const ns = 'vector-effect="non-scaling-stroke"';
   /** 四角形なら rect、円・楕円なら ellipse を返す */
@@ -801,11 +934,14 @@ function planMarkup(o) {
   const dimText = (obj, R) => (obj.shape === 'circle' ? `φ${fmt(R.w)}` : `${fmt(R.w)}×${fmt(R.d)}`);
 
   // 床・目盛り
-  h += `<rect x="0" y="0" width="${W}" height="${D}" fill="#fff"/>`;
+  // 壁: 床の輪郭を太さ 2×WALL_T の線で描き、内側の半分を床で隠す。
+  // 三角形の鋭い角は miterlimit を超えると先端が切り落とされ、壁が長く突き出さない
+  h += `<path d="${floorD}" fill="none" stroke="#5f6368" stroke-width="${2 * WALL_T}" stroke-linejoin="miter" stroke-miterlimit="3"/>`;
+  h += `<path d="${floorD}" fill="#fff"/>`;
+  h += `<g clip-path="url(#${P}floor)">`;
   for (let x = 100; x < W; x += 100) h += `<line x1="${x}" y1="0" x2="${x}" y2="${D}" stroke="#e6e9ee" stroke-width="1" ${ns}/>`;
   for (let y = 100; y < D; y += 100) h += `<line x1="0" y1="${y}" x2="${W}" y2="${y}" stroke="#e6e9ee" stroke-width="1" ${ns}/>`;
-  // 壁
-  h += `<path d="M${-WALL_T} ${-WALL_T}H${W + WALL_T}V${D + WALL_T}H${-WALL_T}ZM0 0V${D}H${W}V0Z" fill="#5f6368" fill-rule="evenodd"/>`;
+  h += '</g>';
   // 窓
   for (const w of r.windows) {
     const b = windowBand(r, w);
@@ -926,8 +1062,14 @@ function planMarkup(o) {
   }
   // 部屋寸法
   if (txt) {
-    h += T(W / 2, -WALL_T, `${fmt(W)}cm`, { px: 12, dy: -10, bold: true, fill: '#444' });
-    h += T(-WALL_T, D / 2, `${fmt(D)}cm`, { px: 12, dx: -8, anchor: 'end', bold: true, fill: '#444' });
+    const ls = labelSides(r), lab = { px: 12, bold: true, fill: '#444' };
+    h += ls.h === 'top' ? T(W / 2, -WALL_T, `${fmt(W)}cm`, { ...lab, dy: -10 }) : T(W / 2, D + WALL_T, `${fmt(W)}cm`, { ...lab, dy: 10 });
+    h += ls.v === 'left' ? T(-WALL_T, D / 2, `${fmt(D)}cm`, { ...lab, dx: -8, anchor: 'end' }) : T(W + WALL_T, D / 2, `${fmt(D)}cm`, { ...lab, dx: 8, anchor: 'start' });
+    const hp = hypOf(r);
+    if (hp) {   // 斜めの辺の長さ(壁の外側=三角形のない側に出す)
+      const mx = (hp.a.x + hp.b.x) / 2 - hp.n.x * WALL_T, my = (hp.a.y + hp.b.y) / 2 - hp.n.y * WALL_T;
+      h += T(mx, my, `斜め ${fmt(hp.len)}cm`, { ...lab, dx: -hp.n.x * 8, dy: -hp.n.y * 10, anchor: -hp.n.x > 0 ? 'start' : 'end' });
+    }
   }
   h += '</g>';
   return h;
@@ -944,11 +1086,12 @@ function fitView() {
   const r = room(), { w, h } = stageSize();
   view.w = w; view.h = h;
   if (w < 10 || h < 10) return;
-  const mx = 72, my = 60;   // 寸法ラベル(左・上)と余白ぶん
-  const s = Math.min((w - mx) / (r.width + 2 * WALL_T), (h - my) / (r.depth + 2 * WALL_T));
-  view.s = clamp(s, 0.05, 20);
-  view.tx = (w - r.width * view.s) / 2 + 20;
-  view.ty = (h - r.depth * view.s) / 2 + 14;
+  // 寸法ラベルが出る側(長方形は左・上。三角形は直角の位置しだい)だけ広めに余白を取る
+  const ls = labelSides(r), m = { l: ls.v === 'left' ? 64 : 16, r: ls.v === 'right' ? 64 : 16, t: ls.h === 'top' ? 36 : 16, b: ls.h === 'bottom' ? 36 : 16 };
+  const aw = w - m.l - m.r, ah = h - m.t - m.b, RW = r.width + 2 * WALL_T, RD = r.depth + 2 * WALL_T;
+  view.s = clamp(Math.min(aw / RW, ah / RD), 0.05, 20);
+  view.tx = m.l + WALL_T * view.s + (aw - RW * view.s) / 2;
+  view.ty = m.t + WALL_T * view.s + (ah - RD * view.s) / 2;
   state.fitMode = true;
   requestRender();
 }
@@ -1001,6 +1144,9 @@ stage.addEventListener('pointerdown', (e) => {
   if (ptrs.size > 2) return;
   const hit = e.target.closest && e.target.closest('[data-furn],[data-item]');
   const g = { id: hit ? (hit.dataset.furn || hit.dataset.item) : null, sx: e.clientX, sy: e.clientY, moved: false, tx0: view.tx, ty0: view.ty };
+  // パネルで入力中に配置図の空き部分をタップしたときは、入力を確定してキーボードを閉じるだけにし、選択は外さない
+  const a = document.activeElement;
+  if (!g.id && a && panelBody.contains(a) && (a.tagName === 'INPUT' || a.tagName === 'SELECT')) { a.blur(); g.keepSel = true; }
   if (g.id) {
     const f = findAny(g.id);
     if (!f) return;
@@ -1049,7 +1195,7 @@ function endPointer(e) {
   gesture = null;
   if (!g) return;
   state.dragging = false;
-  if (!g.moved && !g.id) deselect();
+  if (!g.moved && !g.id && !g.keepSel) deselect();
   if (g.moved && g.drag) {
     if (g.item) { dropItem(findI(g.id)); changed({ panel: 'full' }); }
     else changed({ panel: 'sync' });
@@ -1118,7 +1264,7 @@ function freeSpot(w, d) {
   const r = room(), obs = obstacles(r).map((o) => box(o.x0, o.y0, o.w, o.d));
   for (let y = 0; y + d <= r.depth; y += 10) for (let x = 0; x + w <= r.width; x += 10) {
     const c = box(x, y, w, d);
-    if (!obs.some((o) => inter(o, c))) return { x, y };
+    if (boxInRoom(c, r) && !obs.some((o) => inter(o, c))) return { x, y };
   }
   return { x: 0, y: 0 };
 }
@@ -1224,7 +1370,16 @@ dlgCard.addEventListener('click', (e) => {
   applyDlgDefaults();
   renderDlg();
 });
-dlgEl.addEventListener('click', (e) => { if (e.target === dlgEl) closeDlg(); });
+// 背景をタップしたら閉じる。ただし入力中なら1回目はキーボードを閉じるだけにする(スマホでキーボードを閉じようとして入力内容ごと消えないように)。
+// 入力欄の中で押して背景で離した場合(文字をドラッグ選択したときなど)も閉じない
+let dlgDownOnBg = false;
+dlgEl.addEventListener('pointerdown', (e) => { dlgDownOnBg = e.target === dlgEl; });
+dlgEl.addEventListener('click', (e) => {
+  if (e.target !== dlgEl || !dlgDownOnBg) return;
+  const a = document.activeElement;
+  if (a && dlgCard.contains(a) && (a.tagName === 'INPUT' || a.tagName === 'SELECT')) { a.blur(); return; }
+  closeDlg();
+});
 
 function createFromDlg() {
   if (state.mode !== 'edit') return;
@@ -1332,6 +1487,8 @@ function sel(label, col, id, key, val, opts, cls = '') {
   return `<label class="fld ${cls}"><span>${label}</span><select data-col="${col}" data-id="${esc(id)}" data-key="${key}">${opts.map(([v, l]) => `<option value="${esc(v)}" ${v === val ? 'selected' : ''}>${l}</option>`).join('')}</select></label>`;
 }
 const WALL_OPTS = WALLS.map((w) => [w, WALL_LABEL[w] + 'の壁']);
+/** 入力途中では反映せず、確定(change)時だけ反映する寸法の項目 */
+const SIZE_KEYS = ['w', 'd', 'h', 'width', 'depth'];
 
 function renderPanel() {
   renderTabs();
@@ -1462,13 +1619,19 @@ function warnTab() {
 
 function roomTab() {
   const r = room(), S = state.data.settings, ro = state.mode !== 'edit';
+  const tri = isTri(r), WALL_OPTS = roomWalls(r).map((w) => [w, WALL_LABEL[w] + 'の壁']);   // 三角形は直角をはさむ2辺だけ
   const add = (act, label) => (ro ? '' : `<button class="btn" data-act="${act}" style="width:100%;margin-top:8px">${label}</button>`);
   const del = (col, id) => (ro ? '' : `<button class="btn danger" data-act="delItem" data-col="${col}" data-id="${esc(id)}" aria-label="削除">✕</button>`);
   return `<fieldset ${ro ? 'disabled' : ''}><div class="stack">
     <h3>部屋</h3>
     ${fld('部屋名', 'room', r.id, 'name', r.name, { type: 'text' })}
-    <div class="grid2">${fld('幅 (cm)', 'room', r.id, 'width', r.width)}${fld('奥行き (cm)', 'room', r.id, 'depth', r.depth)}</div>
-    <p class="note">座標は部屋の内側の左上が原点(0,0)、単位はcmです。</p>
+    <div class="grid2">
+      ${sel('形', 'room', r.id, 'shape', r.shape || 'rect', ROOM_SHAPE_OPTS, tri ? '' : 'full')}
+      ${tri ? sel('直角の位置', 'room', r.id, 'corner', r.corner, CORNERS.map((c) => [c, CORNER_LABEL[c]])) : ''}
+    </div>
+    <div class="grid2">${fld(tri ? '横の辺 (cm)' : '幅 (cm)', 'room', r.id, 'width', r.width)}${fld(tri ? '縦の辺 (cm)' : '奥行き (cm)', 'room', r.id, 'depth', r.depth)}</div>
+    ${tri ? `<p class="note">直角をはさむ2辺の長さを入れます。斜めの辺: <b id="hypLen">${fmt(hypLen(r))}</b> cm(自動)。ドア・窓は斜めの壁には置けません。</p>` : ''}
+    <p class="note">座標は部屋${tri ? 'を囲む長方形' : ''}の内側の左上が原点(0,0)、単位はcmです。</p>
 
     <h3>固定物(柱・出っ張り)</h3>
     ${r.fixtures.map((o) => `<div class="card"><div class="cardhead"><span>${esc(o.name)}</span>${del('fixtures', o.id)}</div><div class="grid2">
@@ -1551,6 +1714,9 @@ function applyField(t, commit) {
   const obj = lookup(col, id);
   if (!obj) return;
   if (t.type === 'number') {
+    // 寸法は入力途中の値(120 と打つ途中の 1 など)で家具や部屋が縮んで消えて見えないよう、確定時だけ反映する。
+    // 空欄のまま確定したら元の値に戻る
+    if (!commit && SIZE_KEYS.includes(key)) return;
     let v = parseFloat(t.value);
     if (!Number.isFinite(v)) { if (commit) t.value = obj[key]; return; }
     const [a, b] = LIM[col + '.' + key] || LIM[key] || [-1e6, 1e6];
@@ -1575,13 +1741,20 @@ function applyField(t, commit) {
   }
   if (col === 'room') {
     if (key === 'name') updateChrome();
-    else {
+    else if (key === 'shape' || key === 'corner') {
+      // 形・直角の位置が変わると、置ける壁・入力欄のラベル・寸法の出る側が変わる
+      if (fixOpeningWalls(obj)) toast('斜めの壁の側にあったドア・窓を、向かいの壁へ移しました');
+      rerender = true;
+      fitView();
+    } else {
       if (commit && fitOpenings(obj)) rerender = true;   // 入力途中の値では動かさず、確定時だけ収める
       fitView();
     }
   }
   if (col === 'settings' && commit && key === 'aisleTight' && obj.aisleTight > obj.aisleMin) { obj.aisleMin = obj.aisleTight; rerender = true; }
   changed({ panel: 'none' });
+  const hl = $('#hypLen');
+  if (hl && col === 'room') hl.textContent = fmt(hypLen(obj));
   if (commit && t.type === 'number' && !rerender) t.value = obj[key];
   if (rerender) renderPanel();
 }
@@ -1617,7 +1790,7 @@ function changed(o = {}) {
 function updateChrome() {
   const r = room(), n = state.warns.length;
   const reds = state.warns.filter((w) => w.level === 'red').length;
-  $('#btnRoom').textContent = `${r.name}(${fmt(r.width)}×${fmt(r.depth)})`;
+  $('#btnRoom').textContent = `${r.name}(${isTri(r) ? '△' : ''}${fmt(r.width)}×${fmt(r.depth)})`;
   const b = $('#badge');
   b.textContent = n ? `⚠ ${n}` : '✓ OK';
   b.className = reds ? 'red' : n ? 'yel' : '';
@@ -1815,9 +1988,10 @@ function setHideWarn(v) {
 function printSvg(landscape) {
   const r = room(), W = r.width, D = r.depth;
   const vwMax = landscape ? 1000 : 700, vhMax = landscape ? 520 : 720;
-  const s = clamp(Math.min((vwMax - 56 - 16) / (W + 2 * WALL_T), (vhMax - 22 - 12) / (D + 2 * WALL_T)), 0.05, 20);
-  const tx = 56 + WALL_T * s, ty = 22 + WALL_T * s;
-  const vw = tx + (W + WALL_T) * s + 16, vh = ty + (D + WALL_T) * s + 12;
+  const ls = labelSides(r), m = { l: ls.v === 'left' ? 56 : 16, r: ls.v === 'right' ? 56 : 16, t: ls.h === 'top' ? 22 : 12, b: ls.h === 'bottom' ? 22 : 12 };
+  const s = clamp(Math.min((vwMax - m.l - m.r) / (W + 2 * WALL_T), (vhMax - m.t - m.b) / (D + 2 * WALL_T)), 0.05, 20);
+  const tx = m.l + WALL_T * s, ty = m.t + WALL_T * s;
+  const vw = tx + (W + WALL_T) * s + m.r, vh = ty + (D + WALL_T) * s + m.b;
   const keep = { ...view };
   Object.assign(view, { s, tx, ty, w: vw, h: vh });   // T() などが view.s を参照するため一時的に差し替える
   try {
@@ -1836,7 +2010,7 @@ function buildPrint() {
   const warns = state.warns.map((w) => `<li>${w.level === 'red' ? '✕ ' : '▲ '}${esc(w.text)}</li>`).join('');
   $('#printArea').innerHTML = `
     <h1>${esc(r.name)}</h1>
-    <p class="meta">部屋 ${fmt(r.width)} × ${fmt(r.depth)} cm ／ ${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 印刷 ／ 判定: 赤 ${state.warns.filter((w) => w.level === 'red').length} 件・黄 ${state.warns.filter((w) => w.level !== 'red').length} 件</p>
+    <p class="meta">部屋 ${isTri(r) ? '直角三角形 ' : ''}${fmt(r.width)} × ${fmt(r.depth)} cm${isTri(r) ? `(直角が${CORNER_LABEL[r.corner]}・斜めの辺 ${fmt(hypLen(r))} cm)` : ''} ／ ${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 印刷 ／ 判定: 赤 ${state.warns.filter((w) => w.level === 'red').length} 件・黄 ${state.warns.filter((w) => w.level !== 'red').length} 件</p>
     <div class="pplan">${printSvg(landscape).replace('<svg ', `<svg style="max-height:${landscape ? 125 : 165}mm" `)}</div>
     <h2>家具(単位 cm)</h2>
     ${furnRows ? `<table><thead><tr><th>名前</th><th>形</th><th>横 × 縦</th><th>高さ</th><th>前方</th><th>位置 X, Y</th></tr></thead><tbody>${furnRows}</tbody></table>` : '<p>なし</p>'}
@@ -1899,8 +2073,18 @@ document.addEventListener('click', (e) => {
       break;
     }
     case 'addFixture': r.fixtures.push({ id: nextId(r.fixtures, 'f'), name: '出っ張り', x: 0, y: 0, w: 30, d: 30 }); changed({ panel: 'full' }); break;
-    case 'addDoor': r.doors.push({ id: nextId(r.doors, 'd'), wall: 'bottom', offset: Math.min(20, Math.max(0, r.width - 80)), width: 80, type: 'swing', hinge: 'left', opens: 'in' }); changed({ panel: 'full' }); break;
-    case 'addWindow': r.windows.push({ id: nextId(r.windows, 'w'), wall: 'top', offset: Math.min(100, Math.max(0, r.width - 100)), width: Math.min(160, r.width), sill: 90 }); changed({ panel: 'full' }); break;
+    case 'addDoor': {   // 三角形では下の壁がないこともあるので、存在する壁に置く
+      const wall = roomWalls(r).includes('bottom') ? 'bottom' : 'top';
+      r.doors.push({ id: nextId(r.doors, 'd'), wall, offset: Math.min(20, Math.max(0, r.width - 80)), width: Math.min(80, r.width), type: 'swing', hinge: 'left', opens: 'in' });
+      changed({ panel: 'full' });
+      break;
+    }
+    case 'addWindow': {
+      const wall = roomWalls(r).includes('top') ? 'top' : 'bottom';
+      r.windows.push({ id: nextId(r.windows, 'w'), wall, offset: Math.min(100, Math.max(0, r.width - 100)), width: Math.min(160, r.width), sill: 90 });
+      changed({ panel: 'full' });
+      break;
+    }
     case 'delItem': {
       r[d.col] = r[d.col].filter((o) => o.id !== d.id);
       changed({ panel: 'full' });
