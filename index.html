@@ -103,6 +103,17 @@ h3:first-child{margin-top:0}
 .urlbox{width:100%;height:44px;padding:0 8px;font-size:16px;border:1px solid #b7bcc4;border-radius:8px}
 fieldset{border:0;padding:0;margin:0;min-width:0}
 
+/* 部屋設計モード */
+#app.design #stage{cursor:crosshair}
+.dtitle{flex:1;display:flex;align-items:center;min-height:44px;padding:0 12px;font-weight:700;color:var(--blue)}
+.dlist{display:flex;flex-direction:column;gap:6px}
+.drow{display:flex;align-items:center;gap:6px;min-height:44px;font-size:15px}
+.drow .dname{flex:none;width:3.2em;font-weight:700}
+.drow .ddir{flex:none;width:4em;color:var(--sub)}
+.drow input{flex:1;min-width:0;height:44px;padding:0 10px;border:1px solid #b7bcc4;border-radius:8px;background:#fff;font-size:16px}
+.drow .dok{flex:none;width:1.2em;color:var(--ok);font-weight:700}
+#dprob:empty{display:none}
+
 #toast{position:fixed;left:50%;bottom:calc(80px + env(safe-area-inset-bottom));transform:translateX(-50%);max-width:90%;padding:10px 16px;border-radius:8px;background:rgba(32,33,36,.92);color:#fff;font-size:15px;opacity:0;pointer-events:none;transition:opacity .2s;z-index:10}
 #toast.show{opacity:1}
 
@@ -208,9 +219,8 @@ const SHAPES = ['rect', 'circle', 'ellipse'];
 const SHAPE_LABEL = { rect: '四角形', circle: '円', ellipse: '楕円' };
 const SHAPE_OPTS = SHAPES.map((k) => [k, SHAPE_LABEL[k]]);
 const PREF_KEY = 'furniture-checker.prefs.v1';
-const ROOM_SHAPE_OPTS = [['rect', '長方形'], ['tri', '直角三角形']];
-const CORNERS = ['tl', 'tr', 'bl', 'br'];
-const CORNER_LABEL = { tl: '左上', tr: '右上', bl: '左下', br: '右下' };
+const ROOM_SHAPE_OPTS = [['rect', '長方形'], ['poly', '自由な形']];
+const POLY_MAX = 40;      // 自由な形の頂点の上限
 
 const LIM = {
   'room.width': [50, 3000], 'room.depth': [50, 3000],
@@ -328,7 +338,7 @@ function sampleData() {
     version: 1,
     settings: { ...DEFAULT_SETTINGS },
     rooms: [{
-      id: 'r1', name: '洋室', width: 360, depth: 270, shape: 'rect', corner: 'tl',
+      id: 'r1', name: '洋室', width: 360, depth: 270, shape: 'rect',
       fixtures: [{ id: 'f1', name: '柱', x: 0, y: 0, w: 30, d: 30 }],
       doors: [{ id: 'd1', wall: 'bottom', offset: 20, width: 80, type: 'swing', hinge: 'left', opens: 'in' }],
       windows: [{ id: 'w1', wall: 'top', offset: 100, width: 160, sill: 90 }],
@@ -349,7 +359,7 @@ function sampleData() {
 function emptyData(settings) {
   return {
     version: 1, settings: { ...(settings || DEFAULT_SETTINGS) },
-    rooms: [{ id: 'r1', name: '新しい部屋', width: 360, depth: 270, shape: 'rect', corner: 'tl', fixtures: [], doors: [], windows: [], furniture: [], items: [] }],
+    rooms: [{ id: 'r1', name: '新しい部屋', width: 360, depth: 270, shape: 'rect', fixtures: [], doors: [], windows: [], furniture: [], items: [] }],
   };
 }
 
@@ -391,20 +401,20 @@ function normalize(d) {
     const room = {
       id: str(r.id, 'r' + (i + 1)), name: str(r.name, '部屋'),
       width: num(r.width, 360, ...LIM['room.width']), depth: num(r.depth, 270, ...LIM['room.depth']),
-      // 部屋の形。省略時(旧データ)は長方形。三角形は直角三角形で、width・depth が直角をはさむ2辺、corner が直角の位置
-      shape: oneOf(r.shape, ['rect', 'tri'], 'rect'), corner: oneOf(r.corner, CORNERS, 'tl'),
+      // 部屋の形。省略時(旧データ)は長方形。poly は頂点(points)で決まる自由な形。旧データの tri(直角三角形)は poly に変換する
+      shape: oneOf(r.shape, ['rect', 'poly', 'tri'], 'rect'),
       fixtures: objs(r.fixtures).map((o) => ({
         id: str(o && o.id, ''), name: str(o && o.name, '固定物'),
         x: num(o && o.x, 0, ...LIM.x), y: num(o && o.y, 0, ...LIM.y), w: num(o && o.w, 30, ...LIM.w), d: num(o && o.d, 30, ...LIM.d),
       })),
       doors: objs(r.doors).map((o) => ({
-        id: str(o && o.id, ''), wall: oneOf(o && o.wall, WALLS, 'bottom'),
+        id: str(o && o.id, ''), wall: oneOf(o && o.wall, WALLS, 'bottom'), edge: num(o && o.edge, 0, 0, POLY_MAX),
         offset: num(o && o.offset, 0, ...LIM.offset), width: num(o && o.width, 80, ...LIM['doors.width']),
         type: oneOf(o && o.type, ['swing', 'sliding'], 'swing'),
         hinge: oneOf(o && o.hinge, ['left', 'right'], 'left'), opens: oneOf(o && o.opens, ['in', 'out'], 'in'),
       })),
       windows: objs(r.windows).map((o) => ({
-        id: str(o && o.id, ''), wall: oneOf(o && o.wall, WALLS, 'top'),
+        id: str(o && o.id, ''), wall: oneOf(o && o.wall, WALLS, 'top'), edge: num(o && o.edge, 0, 0, POLY_MAX),
         offset: num(o && o.offset, 0, ...LIM.offset), width: num(o && o.width, 100, ...LIM['windows.width']),
         sill: num(o && o.sill, 90, ...LIM.sill),
       })),
@@ -429,10 +439,71 @@ function normalize(d) {
     // 載せる家具が見つからない小物は表示できないため取り除く
     const fids = new Set(room.furniture.map((f) => f.id));
     room.items = room.items.filter((it) => fids.has(it.on));
-    fixOpeningWalls(room);   // 三角形で存在しない壁にあるドア・窓は向かいの壁へ
+    normalizeShape(room, r);
+    fitOpenings(room);   // ドア・窓を壁(辺)の長さに収める
     return room;
   });
   return { version: 1, settings, rooms };
+}
+
+/** 頂点の配列を読む(数値でない点は捨てる)。座標は -5000〜5000 に収め、0.1cm に丸める */
+function parsePoints(v) {
+  if (!Array.isArray(v)) return null;
+  return v.filter((p) => p && typeof p === 'object' && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y)))
+    .map((p) => ({ x: round1(clamp(Number(p.x), -5000, 5000)), y: round1(clamp(Number(p.y), -5000, 5000)) }));
+}
+/** 旧データの直角三角形の頂点(旧 roomPoly と同じ順) */
+function triPoints(W, D, corner) {
+  return ({
+    tl: [{ x: 0, y: 0 }, { x: W, y: 0 }, { x: 0, y: D }],
+    tr: [{ x: 0, y: 0 }, { x: W, y: 0 }, { x: W, y: D }],
+    bl: [{ x: 0, y: 0 }, { x: W, y: D }, { x: 0, y: D }],
+    br: [{ x: W, y: 0 }, { x: W, y: D }, { x: 0, y: D }],
+  }[corner] || [{ x: 0, y: 0 }, { x: W, y: 0 }, { x: 0, y: D }]);
+}
+/**
+ * 部屋の形を正規化する(normalize から呼ぶ)。
+ * poly: 頂点を検証し、不正なら外寸の長方形に落とす。向きを時計回り(polyArea が正)にそろえ、左上を (0,0) に寄せる。
+ * tri(旧データ): poly に変換し、ドア・窓を壁から辺へ付け替える。
+ * poly のドア・窓は edge を持ち wall を持たない。rect は wall を持ち edge を持たない
+ */
+function normalizeShape(room, src) {
+  if (room.shape === 'poly') {
+    const pts = parsePoints(src.points);
+    if (!pts || polyProblem(pts)) room.shape = 'rect';
+    else {
+      room.points = pts;
+      for (const o of [...room.doors, ...room.windows]) o.edge = clamp(Math.round(o.edge), 0, pts.length - 1);
+      if (polyArea(pts) < 0) {   // 反時計回りなら反転し、ドア・窓は位置で付け替える
+        const snap = openingSnap(room);
+        room.points = pts.slice().reverse();
+        remapOpenings(room, snap);
+      }
+      shiftToOrigin(room);
+    }
+  } else if (room.shape === 'tri') {
+    // 控えは外接長方形の壁の約束(openingEdge の rect 分岐)で取る
+    const snap = openingSnap({ ...room, shape: 'rect' });
+    room.shape = 'poly';
+    room.points = triPoints(room.width, room.depth, src.corner);
+    remapOpenings(room, snap);
+    shiftToOrigin(room);
+  }
+  if (room.shape === 'poly') for (const o of [...room.doors, ...room.windows]) delete o.wall;
+  else {
+    delete room.points;
+    for (const o of [...room.doors, ...room.windows]) delete o.edge;
+  }
+}
+/** poly の部屋の左上を (0,0) に寄せ、width・depth を外接長方形に合わせる。家具・固定物も同じ量ずらす(ドア・窓は辺の番号と距離なので変わらない) */
+function shiftToOrigin(r) {
+  const b = polyBox(r.points), dx = b.x0, dy = b.y0;
+  if (Math.abs(dx) > EPS || Math.abs(dy) > EPS) {
+    r.points = r.points.map((p) => ({ x: round1(p.x - dx), y: round1(p.y - dy) }));
+    for (const o of [...r.furniture, ...r.fixtures]) { o.x = round1(o.x - dx); o.y = round1(o.y - dy); }
+  }
+  const b2 = polyBox(r.points);
+  r.width = round1(b2.w); r.depth = round1(b2.d);
 }
 
 /* =====================================================================
@@ -443,6 +514,7 @@ const state = {
   selId: null, tab: 'furn', sheet: false,
   warns: [], levels: {}, focusKey: null,
   dragging: false, fitMode: true, ruler: false, hideText: false, hideWarn: false,
+  design: null,   // 部屋設計モードの下書き(編集中だけ)。null なら通常モード
 };
 const view = { s: 1, tx: 0, ty: 0, w: 0, h: 0 };
 const room = () => state.data.rooms[0];
@@ -483,20 +555,13 @@ function frontRect(f) {
     default: return box(r.x0, r.y1, r.w, t);
   }
 }
-function wallLen(r, wall) { return wall === 'top' || wall === 'bottom' ? r.width : r.depth; }
-
-/* ---- 部屋の形(長方形 / 直角三角形) ---- */
-const isTri = (r) => r.shape === 'tri';
-/** 部屋の多角形。どの形も同じ向き(面積が正)に頂点を並べる。三角形は corner が直角の位置 */
+/* ---- 部屋の形(長方形 / 自由な形) ---- */
+const isPoly = (r) => r.shape === 'poly';
+/** 部屋の多角形。画面上で時計回り(polyArea が正)。自由な形は points、長方形は4隅 */
 function roomPoly(r) {
+  if (isPoly(r) && Array.isArray(r.points)) return r.points;
   const W = r.width, D = r.depth;
-  if (!isTri(r)) return [{ x: 0, y: 0 }, { x: W, y: 0 }, { x: W, y: D }, { x: 0, y: D }];
-  return {
-    tl: [{ x: 0, y: 0 }, { x: W, y: 0 }, { x: 0, y: D }],
-    tr: [{ x: 0, y: 0 }, { x: W, y: 0 }, { x: W, y: D }],
-    bl: [{ x: 0, y: 0 }, { x: W, y: D }, { x: 0, y: D }],
-    br: [{ x: W, y: 0 }, { x: W, y: D }, { x: 0, y: D }],
-  }[r.corner] || [{ x: 0, y: 0 }, { x: W, y: 0 }, { x: 0, y: D }];
+  return [{ x: 0, y: 0 }, { x: W, y: 0 }, { x: W, y: D }, { x: 0, y: D }];
 }
 const polyD = (p) => `M${p.map((q) => `${q.x} ${q.y}`).join('L')}Z`;
 /** 部屋の辺。u は向き(単位ベクトル)、n は部屋の内側を向く法線 */
@@ -508,80 +573,144 @@ function roomEdges(r) {
     return { a, b, u, n: { x: -u.y, y: u.x }, len };
   });
 }
-/** 存在する壁(ドア・窓を置ける壁)。三角形は直角をはさむ2辺だけ */
-function roomWalls(r) {
-  if (!isTri(r)) return WALLS;
-  return { tl: ['top', 'left'], tr: ['top', 'right'], bl: ['bottom', 'left'], br: ['bottom', 'right'] }[r.corner] || ['top', 'left'];
+/** 辺が軸に平行でない(斜め)か */
+const isDiag = (e) => Math.abs(e.u.x) > 1e-4 && Math.abs(e.u.y) > 1e-4;
+/** 点 p から線分 ab までの距離 */
+function segDist(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy;
+  const t = L2 > 0 ? clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / L2, 0, 1) : 0;
+  return Math.hypot(p.x - a.x - dx * t, p.y - a.y - dy * t);
 }
-/** 斜めの壁(三角形のときだけ)。c は「内側の法線方向の位置」で、点 p の壁からの距離は n·p − c */
-function hypOf(r) {
-  if (!isTri(r)) return null;
-  const e = roomEdges(r).find((o) => Math.abs(o.u.x) > EPS && Math.abs(o.u.y) > EPS);
-  return e ? { ...e, c: e.n.x * e.a.x + e.n.y * e.a.y } : null;
+/** 点が多角形の内側か(レイキャスティング・偶奇。へこんだ形にも使える) */
+function pointInPoly(p, pts) {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const a = pts[i], b = pts[j];
+    if ((a.y > p.y) !== (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) inside = !inside;
+  }
+  return inside;
 }
-const hypLen = (r) => Math.hypot(r.width, r.depth);
-/** 点が部屋の内側か(凸多角形なので、すべての辺の内側にあれば内側) */
+/** 点が部屋の内側か。自由な形は「境界から tol 以内なら内側」+ レイキャスティング */
 function inRoom(p, r, tol = EPS) {
-  return roomEdges(r).every((e) => e.n.x * (p.x - e.a.x) + e.n.y * (p.y - e.a.y) >= -tol);
+  if (!isPoly(r)) return roomEdges(r).every((e) => e.n.x * (p.x - e.a.x) + e.n.y * (p.y - e.a.y) >= -tol);
+  const pts = roomPoly(r);
+  for (let i = 0; i < pts.length; i++) if (segDist(p, pts[i], pts[(i + 1) % pts.length]) <= tol) return true;
+  return pointInPoly(p, pts);
 }
-/** 図形(四角形 or 円・楕円)が斜めの壁にいちばん近づく点と、そこから壁までの距離 */
-function nearestToHyp(o, hp) {
+/** 図形(凸多角形)が部屋からはみ出している面積(cm²)。部屋(へこみあり)を図形(凸)で切り抜いた面積を引く */
+function outsideArea(shapePoly, r) {
+  const inside = clipPoly(roomPoly(r), shapePoly);
+  const a = inside.length >= 3 ? Math.abs(polyArea(inside)) : 0;
+  return Math.max(0, Math.abs(polyArea(shapePoly)) - a);
+}
+/**
+ * 頂点の並びが部屋の形として使えないなら理由(文字列)、使えるなら null。
+ * 条件: 3〜40点・1cm 未満の辺がない・面積がある・辺が交差しない・外寸 50〜3000cm
+ */
+function polyProblem(p) {
+  const n = p.length;
+  if (n < 3) return '角が3つ以上必要です';
+  if (n > POLY_MAX) return `角は${POLY_MAX}個までです`;
+  for (let i = 0; i < n; i++) {
+    const a = p[i], b = p[(i + 1) % n];
+    if (Math.hypot(b.x - a.x, b.y - a.y) < 1) return `辺${i + 1}が短すぎます(1cm未満)`;
+  }
+  if (Math.abs(polyArea(p)) < 1) return '面積がありません';
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const onSeg = (a, b, q) => Math.min(a.x, b.x) - 1e-6 <= q.x && q.x <= Math.max(a.x, b.x) + 1e-6 && Math.min(a.y, b.y) - 1e-6 <= q.y && q.y <= Math.max(a.y, b.y) + 1e-6;
+  const hit = (a, b, c, d) => {
+    const d1 = cross(c, d, a), d2 = cross(c, d, b), d3 = cross(a, b, c), d4 = cross(a, b, d), E = 1e-6;
+    if (((d1 > E && d2 < -E) || (d1 < -E && d2 > E)) && ((d3 > E && d4 < -E) || (d3 < -E && d4 > E))) return true;
+    return (Math.abs(d1) <= E && onSeg(c, d, a)) || (Math.abs(d2) <= E && onSeg(c, d, b))
+      || (Math.abs(d3) <= E && onSeg(a, b, c)) || (Math.abs(d4) <= E && onSeg(a, b, d));
+  };
+  for (let i = 0; i < n; i++) {
+    const a = p[i], b = p[(i + 1) % n], c = p[(i + 2) % n];
+    // 隣り合う辺が折り返して重なる(とげ)
+    if (n > 3 && Math.abs(cross(a, b, c)) < 1e-6 && (b.x - a.x) * (c.x - b.x) + (b.y - a.y) * (c.y - b.y) < 0) return '辺が重なっています';
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue;   // 先頭と末尾の辺は隣どうし
+      if (hit(a, b, p[j], p[(j + 1) % n])) return '辺が交差しています';
+    }
+  }
+  const b = polyBox(p);
+  if (b.w < 50 || b.d < 50) return '外寸(縦・横)が50cm未満です';
+  if (b.w > 3000 || b.d > 3000) return '外寸(縦・横)が3000cmを超えています';
+  return null;
+}
+/** 長方形 b(円・楕円は round 付き)が部屋に収まっているか */
+function boxInRoom(b, r) {
+  if (isPoly(r)) return outsideArea(polyOf(b), r) <= 0.5;
+  return !(b.x0 < -EPS || b.y0 < -EPS || b.x1 > r.width + EPS || b.y1 > r.depth + EPS);
+}
+/** 図形(四角形 or 円・楕円)が辺 e にいちばん近づく点と、そこから辺の直線までの距離(内側が正) */
+function nearestToEdge(o, e) {
+  const c = e.n.x * e.a.x + e.n.y * e.a.y;
   let p;
   if (o.round) {
-    const a = o.w / 2, b = o.d / 2, k = Math.hypot(a * hp.n.x, b * hp.n.y) || 1;
-    p = { x: (o.x0 + o.x1) / 2 - a * a * hp.n.x / k, y: (o.y0 + o.y1) / 2 - b * b * hp.n.y / k };
+    const a = o.w / 2, b = o.d / 2, k = Math.hypot(a * e.n.x, b * e.n.y) || 1;
+    p = { x: (o.x0 + o.x1) / 2 - a * a * e.n.x / k, y: (o.y0 + o.y1) / 2 - b * b * e.n.y / k };
   } else {
     p = [{ x: o.x0, y: o.y0 }, { x: o.x1, y: o.y0 }, { x: o.x1, y: o.y1 }, { x: o.x0, y: o.y1 }]
-      .reduce((m, q) => (hp.n.x * q.x + hp.n.y * q.y < hp.n.x * m.x + hp.n.y * m.y ? q : m));
+      .reduce((m, q) => (e.n.x * q.x + e.n.y * q.y < e.n.x * m.x + e.n.y * m.y ? q : m));
   }
-  const dist = hp.n.x * p.x + hp.n.y * p.y - hp.c;
-  const t = hp.u.x * (p.x - hp.a.x) + hp.u.y * (p.y - hp.a.y);   // 壁の始点から足までの長さ
-  return { p, dist, foot: { x: p.x - hp.n.x * dist, y: p.y - hp.n.y * dist }, onWall: t >= 0 && t <= hp.len };
+  const dist = e.n.x * p.x + e.n.y * p.y - c;
+  const t = e.u.x * (p.x - e.a.x) + e.u.y * (p.y - e.a.y);   // 辺の始点から足までの長さ
+  return { p, dist, foot: { x: p.x - e.n.x * dist, y: p.y - e.n.y * dist }, onWall: t >= 0 && t <= e.len };
 }
-/** 長方形 b が部屋に収まっているか */
-function boxInRoom(b, r) {
-  if (!isTri(r)) return !(b.x0 < -EPS || b.y0 < -EPS || b.x1 > r.width + EPS || b.y1 > r.depth + EPS);
-  return [{ x: b.x0, y: b.y0 }, { x: b.x1, y: b.y0 }, { x: b.x1, y: b.y1 }, { x: b.x0, y: b.y1 }].every((p) => inRoom(p, r));
-}
-/** 図形の多角形のうち、部屋の外に出ている部分(辺ごとの外側の半平面で切り抜く) */
-function outsideParts(poly, r) {
-  const B = 1e4, out = [];
-  for (const e of roomEdges(r)) {
-    const a = { x: e.a.x - e.u.x * B, y: e.a.y - e.u.y * B }, b = { x: e.b.x + e.u.x * B, y: e.b.y + e.u.y * B };
-    const half = [a, b, { x: b.x - e.n.x * B, y: b.y - e.n.y * B }, { x: a.x - e.n.x * B, y: a.y - e.n.y * B }];
-    const p = clipPoly(poly, half);
-    if (p.length >= 3 && Math.abs(polyArea(p)) >= 0.05) out.push({ poly: p });
+/** 辺の表示名。長方形は「上の壁」、自由な形は「辺3」(1始まり) */
+const openingName = (r, o) => (isPoly(r) ? `辺${o.edge + 1}` : `${WALL_LABEL[o.wall]}の壁`);
+/** 配置図の辺番号(①〜⑳、それ以降は (21)) */
+const circled = (i) => (i < 20 ? String.fromCharCode(0x2460 + i) : `(${i + 1})`);
+
+/**
+ * ドア・窓が付く辺 { a, u, n, len }。a は始点、u は向き、n は内向きの法線。
+ * 長方形は壁の約束(上・下は左端が始点、左・右は上端が始点)、自由な形は辺 edge
+ */
+function openingEdge(r, o) {
+  if (isPoly(r)) {
+    const es = roomEdges(r);
+    return es[clamp(Math.round(o.edge) || 0, 0, es.length - 1)];
   }
-  return out;
+  const W = r.width, D = r.depth;
+  switch (o.wall) {
+    case 'top': return { a: { x: 0, y: 0 }, u: { x: 1, y: 0 }, n: { x: 0, y: 1 }, len: W };
+    case 'right': return { a: { x: W, y: 0 }, u: { x: 0, y: 1 }, n: { x: -1, y: 0 }, len: D };
+    case 'left': return { a: { x: 0, y: 0 }, u: { x: 0, y: 1 }, n: { x: 1, y: 0 }, len: D };
+    default: return { a: { x: 0, y: D }, u: { x: 1, y: 0 }, n: { x: 0, y: -1 }, len: W };
+  }
 }
-/** 存在しない壁にあるドア・窓を向かいの壁へ移し、壁の長さに収める。動かしたら true */
-const OPP_WALL = { top: 'bottom', bottom: 'top', left: 'right', right: 'left' };
-function fixOpeningWalls(r) {
-  const ws = roomWalls(r);
-  let moved = false;
-  for (const o of [...r.doors, ...r.windows]) if (!ws.includes(o.wall)) { o.wall = OPP_WALL[o.wall]; moved = true; }
-  return fitOpenings(r) || moved;
+/** 辺の上の区間 [o, o+w] を法線方向へ t だけ押し出した4点の多角形(t<0 は外側) */
+function edgeBand(e, o, w, t) {
+  const s = { x: e.a.x + e.u.x * o, y: e.a.y + e.u.y * o }, f = { x: s.x + e.u.x * w, y: s.y + e.u.y * w };
+  return [s, f, { x: f.x + e.n.x * t, y: f.y + e.n.y * t }, { x: s.x + e.n.x * t, y: s.y + e.n.y * t }];
 }
-/** 寸法ラベルを出す辺(三角形では実際にある辺の外側) */
-function labelSides(r) {
-  const c = isTri(r) ? r.corner : 'tl';
-  return { h: c[0] === 't' ? 'top' : 'bottom', v: c[1] === 'l' ? 'left' : 'right' };
+/** 図形 o と凸多角形 zone が重なっていれば { rect, poly } */
+function polyInter(o, zone) {
+  const p = clipPoly(polyOf(o), zone);
+  if (p.length < 3 || Math.abs(polyArea(p)) < 0.05) return null;
+  return { rect: polyBox(p), poly: p };
 }
 
-/** ドアの幾何。hinge:'left' は壁の始点側(左端/上端)、'right' は終点側(右端/下端) */
+/** ドアの幾何。hinge:'left' は辺の始点側、'right' は終点側。長方形の部屋は band(四角形)、自由な形は bandPoly(4点) */
 function doorGeom(r, dr) {
-  const W = r.width, D = r.depth, o = dr.offset, w = dr.width;
-  let band, start, u, n;
-  switch (dr.wall) {
-    case 'top': band = box(o, -WALL_T, w, WALL_T); start = { x: o, y: 0 }; u = { x: 1, y: 0 }; n = { x: 0, y: 1 }; break;
-    case 'right': band = box(W, o, WALL_T, w); start = { x: W, y: o }; u = { x: 0, y: 1 }; n = { x: -1, y: 0 }; break;
-    case 'left': band = box(-WALL_T, o, WALL_T, w); start = { x: 0, y: o }; u = { x: 0, y: 1 }; n = { x: 1, y: 0 }; break;
-    default: band = box(o, D, w, WALL_T); start = { x: o, y: D }; u = { x: 1, y: 0 }; n = { x: 0, y: -1 };
+  const e = openingEdge(r, dr), o = dr.offset, w = dr.width, u = e.u, n = e.n;
+  const start = { x: e.a.x + u.x * o, y: e.a.y + u.y * o };
+  let band = null, bandPoly = null;
+  if (isPoly(r)) bandPoly = edgeBand(e, o, w, -WALL_T);
+  else {
+    const W = r.width, D = r.depth;
+    switch (dr.wall) {
+      case 'top': band = box(o, -WALL_T, w, WALL_T); break;
+      case 'right': band = box(W, o, WALL_T, w); break;
+      case 'left': band = box(-WALL_T, o, WALL_T, w); break;
+      default: band = box(o, D, w, WALL_T);
+    }
   }
   const atStart = dr.hinge !== 'right';
   const hinge = atStart ? start : { x: start.x + u.x * w, y: start.y + u.y * w };
   const uu = atStart ? u : { x: -u.x, y: -u.y };
-  return { band, hinge, u: uu, n, r: w };
+  return { band, bandPoly, hinge, u: uu, n, r: w, diag: isDiag(e) };
 }
 function sectorBBox(g) {
   const P = [g.hinge, { x: g.hinge.x + g.u.x * g.r, y: g.hinge.y + g.u.y * g.r },
@@ -613,13 +742,15 @@ function sectorPoly(g) {
   }
   return p;
 }
-/** 開閉範囲と図形(四角形 or 円・楕円)が重なるか */
+/** 開閉範囲と図形(四角形 or 円・楕円)が重なるか。斜めの辺のドアと円・楕円は多角形で判定する */
 function sectorHits(g, o) {
-  if (!o.round) return sectorHitsRect(g, o);
+  if (!o.round && !g.diag) return sectorHitsRect(g, o);
   const p = clipPoly(polyOf(o), sectorPoly(g));
   return p.length >= 3 && Math.abs(polyArea(p)) >= 0.05;
 }
+/** 窓の前の判定範囲。長方形の部屋は四角形(box)、自由な形は4点の多角形(配列) */
 function windowZone(r, w) {
+  if (isPoly(r)) return edgeBand(openingEdge(r, w), w.offset, w.width, WINDOW_ZONE);
   switch (w.wall) {
     case 'top': return box(w.offset, 0, w.width, WINDOW_ZONE);
     case 'bottom': return box(w.offset, r.depth - WINDOW_ZONE, w.width, WINDOW_ZONE);
@@ -627,7 +758,9 @@ function windowZone(r, w) {
     default: return box(r.width - WINDOW_ZONE, w.offset, WINDOW_ZONE, w.width);
   }
 }
+/** 窓の描画用の帯。長方形の部屋は四角形(box)、自由な形は4点の多角形(配列) */
 function windowBand(r, w) {
+  if (isPoly(r)) return edgeBand(openingEdge(r, w), w.offset, w.width, -WALL_T);
   switch (w.wall) {
     case 'top': return box(w.offset, -WALL_T, w.width, WALL_T);
     case 'bottom': return box(w.offset, r.depth, w.width, WALL_T);
@@ -635,15 +768,27 @@ function windowBand(r, w) {
     default: return box(r.width, w.offset, WALL_T, w.width);
   }
 }
+/**
+ * 通路判定・物差しに使う壁の箱。長方形は4方向の大きな箱。
+ * 自由な形は軸平行の辺ごとに「辺の範囲 × 外側へ WALL_T」の有限な箱(斜めの辺は edgeAisleWarnings で別に判定)
+ */
 function wallBoxes(r) {
   const B = 1e4;
-  const all = {
-    top: { name: '上の壁', kind: 'wall', ...box(-B, -B, 2 * B, B) },
-    bottom: { name: '下の壁', kind: 'wall', ...box(-B, r.depth, 2 * B, B) },
-    left: { name: '左の壁', kind: 'wall', ...box(-B, -B, B, 2 * B) },
-    right: { name: '右の壁', kind: 'wall', ...box(r.width, -B, B, 2 * B) },
-  };
-  return roomWalls(r).map((w) => all[w]);   // 三角形では存在しない壁(斜めの壁の先)を判定に使わない
+  if (!isPoly(r)) {
+    return [
+      { name: '上の壁', kind: 'wall', ...box(-B, -B, 2 * B, B) },
+      { name: '右の壁', kind: 'wall', ...box(r.width, -B, B, 2 * B) },
+      { name: '下の壁', kind: 'wall', ...box(-B, r.depth, 2 * B, B) },
+      { name: '左の壁', kind: 'wall', ...box(-B, -B, B, 2 * B) },
+    ];
+  }
+  const out = [];
+  roomEdges(r).forEach((e, i) => {
+    if (isDiag(e)) return;
+    const p = polyBox(edgeBand(e, 0, e.len, -WALL_T));
+    out.push({ name: `辺${i + 1}の壁`, kind: 'wall', edge: i, ...box(p.x0, p.y0, p.w, p.d) });
+  });
+  return out;
 }
 function obstacles(r, excludeId) {
   const out = [];
@@ -670,13 +815,9 @@ function computeWarnings() {
 
   // 重なり: 壁(はみ出し)
   for (const { f, r: fr } of F) {
-    if (isTri(r)) {
-      // 三角形: 輪郭の頂点が1つでも外に出ていれば、はみ出し部分を斜線で示す
-      const poly = polyOf(fr);
-      if (poly.some((p) => !inRoom(p, r, 0.01))) {
-        const shapes = outsideParts(poly, r);
-        if (shapes.length) add({ level: 'red', kind: 'overlap', ids: [f.id], rect: fr, shapes, text: `${f.name}が部屋からはみ出しています` });
-      }
+    if (isPoly(r)) {
+      // 自由な形: はみ出した面積で判定し、図形全体を「床の外だけ見える」clipPath 付きで斜線にする
+      if (outsideArea(polyOf(fr), r) > 0.5) add({ level: 'red', kind: 'overlap', ids: [f.id], rect: fr, shapes: [{ outside: fr }], text: `${f.name}が部屋からはみ出しています` });
       continue;
     }
     if (fr.x0 < -EPS || fr.y0 < -EPS || fr.x1 > W + EPS || fr.y1 > D + EPS) {
@@ -695,8 +836,8 @@ function computeWarnings() {
       if (c) add({ level: 'red', kind: 'overlap', ids: [F[i].f.id, F[j].f.id], rect: c.rect, shapes: [hitShape(c)], text: `${F[i].f.name}と${F[j].f.name}が重なっています` });
     }
   }
-  // 三角形: 固定物が部屋の外に出ている(形・直角の位置を変えたときなど)
-  if (isTri(r)) {
+  // 自由な形: 固定物が部屋の外に出ている(形を変えたときなど)
+  if (isPoly(r)) {
     for (const b of FX) if (!boxInRoom(b.r, r)) {
       add({ level: 'yellow', kind: 'fixture', ids: [], rect: b.r, shapes: [b.r], text: `${b.x.name}が部屋の外に出ています(位置を確認してください)` });
     }
@@ -708,7 +849,7 @@ function computeWarnings() {
   }
   // ドア開閉範囲
   for (const s of swings) {
-    const bb = sectorBBox(s.g), label = `ドア${s.i + 1}(${WALL_LABEL[s.dr.wall]}の壁)`;
+    const bb = sectorBBox(s.g), label = `ドア${s.i + 1}(${openingName(r, s.dr)})`;
     const shape = { sector: s.g };
     for (const a of F) if (sectorHits(s.g, a.r)) {
       add({ level: 'red', kind: 'door', ids: [a.f.id], rect: bb, shapes: [shape], text: `${label}の開閉範囲に${a.f.name}がかかっています` });
@@ -724,7 +865,7 @@ function computeWarnings() {
     const causes = [];
     for (const b of F) if (b.f !== a.f && shapeInter(fr, b.r)) causes.push(b.f.name);
     for (const b of FX) if (inter(fr, b.r)) causes.push(b.x.name);
-    for (const s of swings) if (sectorHitsRect(s.g, fr)) causes.push(`ドア${s.i + 1}の開閉範囲`);
+    for (const s of swings) if (sectorHits(s.g, fr)) causes.push(`ドア${s.i + 1}の開閉範囲`);
     if (!boxInRoom(fr, r)) causes.push('壁');
     if (causes.length) {
       add({ level: 'yellow', kind: 'front', ids: [a.f.id], rect: fr, shapes: [fr], text: `${a.f.name}の前方スペース(${fmt(a.f.front)}cm)が${[...new Set(causes)].join('・')}にかかっています` });
@@ -733,16 +874,18 @@ function computeWarnings() {
   // 窓
   r.windows.forEach((w, i) => {
     const zone = windowZone(r, w);
+    // 長方形の部屋は今までどおり四角形どうしの判定、自由な形はゾーン(4点の多角形)で切り抜いた面積で判定
+    const hitZ = (o) => (Array.isArray(zone) ? polyInter(o, zone) : shapeInter(zone, o));
     for (const a of F) {
       if (!(a.f.h > w.sill)) continue;
-      const c = shapeInter(zone, a.r);
+      const c = hitZ(a.r);
       if (c) add({ level: 'yellow', kind: 'window', ids: [a.f.id], rect: c.rect, shapes: [hitShape(c)], text: `${a.f.name}(高さ${fmt(a.f.h)}cm)が窓${i + 1}の前をふさいでいます(窓の下端 ${fmt(w.sill)}cm)` });
     }
     // 家具だけなら窓の下端より低いが、小物を載せると超える場合
     for (const it of r.items) {
       const base = r.furniture.find((f) => f.id === it.on);
       if (!base || base.h > w.sill || !(base.h + it.h > w.sill)) continue;
-      const c = shapeInter(zone, iRect(it, r));
+      const c = hitZ(iRect(it, r));
       if (c) add({ level: 'yellow', kind: 'window', ids: [it.id], rect: c.rect, shapes: [hitShape(c)], text: `${it.name}(${base.name}の上・床から${fmt(base.h + it.h)}cm)が窓${i + 1}の前をふさいでいます(窓の下端 ${fmt(w.sill)}cm)` });
     }
   });
@@ -783,7 +926,7 @@ function narrowest(A, B, axis, i0, i1) {
 
 function aisleWarnings(r, S, out, add) {
   const all = obstacles(r).concat(wallBoxes(r));
-  const blockers = all.filter((o) => o.kind !== 'wall');
+  const blockers = all.filter((o) => o.kind !== 'wall'), poly = isPoly(r);
   for (const axis of ['x', 'y']) {
     const [a0, a1, b0, b1] = axis === 'x' ? ['x0', 'x1', 'y0', 'y1'] : ['y0', 'y1', 'x0', 'x1'];
     for (const A of all) for (const B of all) {
@@ -815,6 +958,8 @@ function aisleWarnings(r, S, out, add) {
           if (!(gap > S.gapIgnore + EPS && gap < S.aisleMin - EPS)) continue;
           rc = axis === 'x' ? box(s0, nr.at - th / 2, gap, th) : box(nr.at - th / 2, s0, th, gap);
         } else rc = axis === 'x' ? box(A.x1, i0, gap, i1 - i0) : box(i0, A.y1, i1 - i0, gap);
+        // 自由な形: 帯が部屋の外を通る(袖壁・へこみをはさむ)なら通路ではない
+        if (poly && outsideArea(polyOf(rc), r) > 0.5) continue;
         const red = gap < S.aisleTight - EPS;
         const ids = [A, B].filter((o) => o.kind === 'furn').map((o) => o.id);
         add({
@@ -825,28 +970,30 @@ function aisleWarnings(r, S, out, add) {
       }
     }
   }
-  diagAisleWarnings(r, S, add);
+  if (poly) edgeAisleWarnings(r, S, add);
 }
 
-/** 三角形の斜めの壁と、家具・固定物とのすき間。いちばん近づく点から壁への垂線で測る */
-function diagAisleWarnings(r, S, add) {
-  const hp = hypOf(r);
-  if (!hp) return;
+/** 自由な形の斜めの辺と、家具・固定物とのすき間。いちばん近づく点から辺への垂線で測る(足が辺の上にあるときだけ) */
+function edgeAisleWarnings(r, S, add) {
   const obs = obstacles(r), TH = 16;
-  for (const O of obs) {
-    const q = nearestToHyp(O, hp), gap = q.dist;
-    if (!q.onWall || !(gap > S.gapIgnore + EPS && gap < S.aisleMin - EPS)) continue;
-    const hx = hp.u.x * TH / 2, hy = hp.u.y * TH / 2, p = q.p, f = q.foot;
-    const band = [{ x: p.x - hx, y: p.y - hy }, { x: p.x + hx, y: p.y + hy }, { x: f.x + hx, y: f.y + hy }, { x: f.x - hx, y: f.y - hy }];
-    // 間に別の家具・固定物があれば、そこは通路ではないので判定しない
-    if (obs.some((C) => C !== O && (() => { const c = clipPoly(polyOf(C), band); return c.length >= 3 && Math.abs(polyArea(c)) >= 0.05; })())) continue;
-    const red = gap < S.aisleTight - EPS;
-    add({
-      level: red ? 'red' : 'yellow', kind: 'aisle', ids: O.kind === 'furn' ? [O.id] : [], rect: polyBox(band), shapes: [{ poly: band }],
-      label: `${fmt(gap)}`,
-      text: `${O.name}と斜めの壁のすき間 ${fmt(gap)}cm${red ? '(通れません)' : '(横向きでやっと)'}`,
-    });
-  }
+  roomEdges(r).forEach((e, i) => {
+    if (!isDiag(e)) return;   // 軸平行の辺は wallBoxes の箱として aisleWarnings で判定済み
+    for (const O of obs) {
+      const q = nearestToEdge(O, e), gap = q.dist;
+      if (!q.onWall || !(gap > S.gapIgnore + EPS && gap < S.aisleMin - EPS)) continue;
+      const hx = e.u.x * TH / 2, hy = e.u.y * TH / 2, p = q.p, f = q.foot;
+      const band = [{ x: p.x - hx, y: p.y - hy }, { x: p.x + hx, y: p.y + hy }, { x: f.x + hx, y: f.y + hy }, { x: f.x - hx, y: f.y - hy }];
+      // 間に別の家具・固定物がある、または帯が部屋の外を通るなら、そこは通路ではないので判定しない
+      if (obs.some((C) => C !== O && polyInter(C, band))) continue;
+      if (outsideArea(band, r) > 0.5) continue;
+      const red = gap < S.aisleTight - EPS;
+      add({
+        level: red ? 'red' : 'yellow', kind: 'aisle', ids: O.kind === 'furn' ? [O.id] : [], rect: polyBox(band), shapes: [{ poly: band }],
+        label: `${fmt(gap)}`,
+        text: `${O.name}と辺${i + 1}の壁のすき間 ${fmt(gap)}cm${red ? '(通れません)' : '(横向きでやっと)'}`,
+      });
+    }
+  });
 }
 
 function recompute() {
@@ -896,27 +1043,40 @@ function neighborLines(f) {
     { ok: (O) => O.y1 <= R.y0 + EPS, gap: (O) => R.y0 - O.y1, perp: ['x0', 'x1'], mk: (O, m) => [m, O.y1, m, R.y0] },
     { ok: (O) => O.y0 >= R.y1 - EPS, gap: (O) => O.y0 - R.y1, perp: ['x0', 'x1'], mk: (O, m) => [m, R.y1, m, O.y0] },
   ];
+  const poly = isPoly(r);
+  /** 自由な形: 線分が部屋の外を通るか(幅1cmの帯にしてはみ出しを測る) */
+  const segBand = (l) => {
+    const dx = l[2] - l[0], dy = l[3] - l[1], L = Math.hypot(dx, dy) || 1, nx = -dy / L * 0.5, ny = dx / L * 0.5;
+    return [{ x: l[0] + nx, y: l[1] + ny }, { x: l[2] + nx, y: l[3] + ny }, { x: l[2] - nx, y: l[3] - ny }, { x: l[0] - nx, y: l[1] - ny }];
+  };
+  const outLine = (l) => outsideArea(segBand(l), r) > 0.5;
   for (const dir of dirs) {
-    let best = null;
+    const cands = [];
     for (const O of all) {
       if (!dir.ok(O)) continue;
       const [p0, p1] = dir.perp;
       const lo = Math.max(R[p0], O[p0]), hi = Math.min(R[p1], O[p1]);
       if (hi - lo <= EPS) continue;
-      const g = dir.gap(O);
-      if (!best || g < best.g) best = { g, m: (lo + hi) / 2, O };
+      cands.push({ g: dir.gap(O), m: (lo + hi) / 2, O });
     }
+    cands.sort((a, b) => a.g - b.g);
+    // 長方形は今までどおりいちばん近いもの。自由な形は部屋の外を通らないもののうちいちばん近いもの
+    const best = poly ? cands.find((c) => !outLine(dir.mk(c.O, c.m))) : cands[0];
     if (best) res.push({ g: best.g, line: dir.mk(best.O, best.m) });
   }
-  const hp = hypOf(r);
-  if (hp) {   // 三角形: 斜めの壁までの距離(垂線)
-    const q = nearestToHyp(R, hp);
-    if (q.onWall && q.dist > 0) res.push({ g: q.dist, line: [q.p.x, q.p.y, q.foot.x, q.foot.y] });
+  if (poly) {   // 自由な形: 斜めの辺までの距離(垂線)
+    for (const e of roomEdges(r)) {
+      if (!isDiag(e)) continue;
+      const q = nearestToEdge(R, e), line = [q.p.x, q.p.y, q.foot.x, q.foot.y];
+      if (q.onWall && q.dist > 0 && !outLine(line) && !all.some((O) => O.kind !== 'wall' && polyInter(O, segBand(line)))) {
+        res.push({ g: q.dist, line });
+      }
+    }
   }
   return res;
 }
 
-function draw() { stage.innerHTML = planMarkup({}); }
+function draw() { stage.innerHTML = state.design ? designMarkup() : planMarkup({}); }
 
 /** 配置図の中身(<defs>と<g>)。画面表示と印刷で共用する。印刷時は view を差し替えてから呼ぶ */
 function planMarkup(o) {
@@ -924,7 +1084,9 @@ function planMarkup(o) {
   const pr = !!o.print, P = o.idp || '', txt = !state.hideText, showW = !state.hideWarn;
   const hatch = (id, col, bg) => `<pattern id="${P}${id}" patternUnits="userSpaceOnUse" width="8" height="8" patternTransform="scale(${inv}) rotate(45)"><rect width="8" height="8" fill="${bg}"/><line x1="0" y1="0" x2="0" y2="8" stroke="${col}" stroke-width="3"/></pattern>`;
   const floorD = polyD(roomPoly(r));
-  let h = `<defs>${hatch('hR', RED, 'rgba(211,47,47,.2)')}${hatch('hY', YEL, 'rgba(230,149,0,.22)')}${hatch('hF', '#8a8f98', '#cfd3d9')}<clipPath id="${P}floor"><path d="${floorD}"/></clipPath></defs>`;
+  let h = `<defs>${hatch('hR', RED, 'rgba(211,47,47,.2)')}${hatch('hY', YEL, 'rgba(230,149,0,.22)')}${hatch('hF', '#8a8f98', '#cfd3d9')}<clipPath id="${P}floor"><path d="${floorD}"/></clipPath>`
+    // はみ出しの斜線用: 床の外だけを残す(大きな四角から床をくり抜く)
+    + `<clipPath id="${P}outside"><path clip-rule="evenodd" d="M-100000 -100000H100000V100000H-100000Z${floorD}"/></clipPath></defs>`;
   h += `<g transform="translate(${view.tx} ${view.ty}) scale(${s})">`;
   const ns = 'vector-effect="non-scaling-stroke"';
   /** 四角形なら rect、円・楕円なら ellipse を返す */
@@ -935,7 +1097,7 @@ function planMarkup(o) {
 
   // 床・目盛り
   // 壁: 床の輪郭を太さ 2×WALL_T の線で描き、内側の半分を床で隠す。
-  // 三角形の鋭い角は miterlimit を超えると先端が切り落とされ、壁が長く突き出さない
+  // 鋭い角は miterlimit を超えると先端が切り落とされ、壁が長く突き出さない
   h += `<path d="${floorD}" fill="none" stroke="#5f6368" stroke-width="${2 * WALL_T}" stroke-linejoin="miter" stroke-miterlimit="3"/>`;
   h += `<path d="${floorD}" fill="#fff"/>`;
   h += `<g clip-path="url(#${P}floor)">`;
@@ -944,21 +1106,29 @@ function planMarkup(o) {
   h += '</g>';
   // 窓
   for (const w of r.windows) {
-    const b = windowBand(r, w);
-    h += `<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.d}" fill="#a9d8f0" stroke="#2c7ba3" stroke-width="1.5" ${ns}/>`;
+    const b = windowBand(r, w), st = `fill="#a9d8f0" stroke="#2c7ba3" stroke-width="1.5" ${ns}`;
+    h += Array.isArray(b) ? `<path d="${polyD(b)}" ${st}/>` : `<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.d}" ${st}/>`;
   }
   // ドア
   for (const dr of r.doors) {
-    const g = doorGeom(r, dr), b = g.band;
+    const g = doorGeom(r, dr), b = g.band, bp = g.bandPoly;
+    /** 帯: 長方形の部屋は rect、自由な形は4点の path */
+    const bandEl = (fill) => (bp ? `<path d="${polyD(bp)}" fill="${fill}" stroke="#a06e3c" stroke-width="1.2" ${ns}/>`
+      : `<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.d}" fill="${fill}" stroke="#a06e3c" stroke-width="1.2" ${ns}/>`);
     if (dr.type === 'swing') {
       const sign = dr.opens === 'in' ? 1 : -1;
       const P2 = { x: g.hinge.x + g.n.x * sign * g.r, y: g.hinge.y + g.n.y * sign * g.r };
       if (dr.opens === 'in') h += `<path d="${sectorD(g)}" fill="rgba(160,110,60,.14)" stroke="#a06e3c" stroke-width="1.2" stroke-dasharray="5 4" ${ns}/>`;
       else h += `<path d="${sectorD(g, -1)}" fill="none" stroke="#a06e3c" stroke-width="1" stroke-dasharray="2 4" opacity=".7" ${ns}/>`;
-      h += `<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.d}" fill="#fff" stroke="#a06e3c" stroke-width="1.2" ${ns}/>`;
+      h += bandEl('#fff');
       h += `<line x1="${g.hinge.x}" y1="${g.hinge.y}" x2="${P2.x}" y2="${P2.y}" stroke="#7a4a1f" stroke-width="3" stroke-linecap="round" ${ns}/>`;
+    } else if (bp) {
+      h += bandEl('#efe1c8');
+      // 引き戸の線: 帯の中心を辺の向きに引く
+      const m0 = { x: (bp[0].x + bp[3].x) / 2, y: (bp[0].y + bp[3].y) / 2 }, m1 = { x: (bp[1].x + bp[2].x) / 2, y: (bp[1].y + bp[2].y) / 2 };
+      h += `<line x1="${m0.x}" y1="${m0.y}" x2="${m1.x}" y2="${m1.y}" stroke="#7a4a1f" stroke-width="2" ${ns}/>`;
     } else {
-      h += `<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.d}" fill="#efe1c8" stroke="#a06e3c" stroke-width="1.2" ${ns}/>`;
+      h += bandEl('#efe1c8');
       const cx = b.x + b.w / 2, cy = b.y + b.d / 2, horiz = dr.wall === 'top' || dr.wall === 'bottom';
       h += horiz
         ? `<line x1="${b.x}" y1="${cy}" x2="${b.x1}" y2="${cy}" stroke="#7a4a1f" stroke-width="2" ${ns}/>`
@@ -1030,6 +1200,7 @@ function planMarkup(o) {
     const fill = `url(#${P}${w.level === 'red' ? 'hR' : 'hY'})`, col = w.level === 'red' ? RED : YEL;
     for (const sh of w.shapes) {
       if (sh.sector) h += `<path d="${sectorD(sh.sector)}" fill="${fill}" stroke="${col}" stroke-width="2" ${ns}/>`;
+      else if (sh.outside) h += shape(sh.outside, `fill="${fill}" stroke="${col}" stroke-width="2" clip-path="url(#${P}outside)" ${ns}`);   // 床の外に出た部分だけ見える
       else if (sh.poly) h += `<path d="M${sh.poly.map((p) => `${p.x} ${p.y}`).join('L')}Z" fill="${fill}" stroke="${col}" stroke-width="2" ${ns}/>`;
       else h += `<rect x="${sh.x}" y="${sh.y}" width="${sh.w}" height="${sh.d}" fill="${fill}" stroke="${col}" stroke-width="${w.kind === 'front' ? 1.5 : 2}" ${ns}/>`;
     }
@@ -1062,13 +1233,19 @@ function planMarkup(o) {
   }
   // 部屋寸法
   if (txt) {
-    const ls = labelSides(r), lab = { px: 12, bold: true, fill: '#444' };
-    h += ls.h === 'top' ? T(W / 2, -WALL_T, `${fmt(W)}cm`, { ...lab, dy: -10 }) : T(W / 2, D + WALL_T, `${fmt(W)}cm`, { ...lab, dy: 10 });
-    h += ls.v === 'left' ? T(-WALL_T, D / 2, `${fmt(D)}cm`, { ...lab, dx: -8, anchor: 'end' }) : T(W + WALL_T, D / 2, `${fmt(D)}cm`, { ...lab, dx: 8, anchor: 'start' });
-    const hp = hypOf(r);
-    if (hp) {   // 斜めの辺の長さ(壁の外側=三角形のない側に出す)
-      const mx = (hp.a.x + hp.b.x) / 2 - hp.n.x * WALL_T, my = (hp.a.y + hp.b.y) / 2 - hp.n.y * WALL_T;
-      h += T(mx, my, `斜め ${fmt(hp.len)}cm`, { ...lab, dx: -hp.n.x * 8, dy: -hp.n.y * 10, anchor: -hp.n.x > 0 ? 'start' : 'end' });
+    const lab = { px: 12, bold: true, fill: '#444' };
+    if (!isPoly(r)) {   // 長方形: 上と左に幅・奥行き
+      h += T(W / 2, -WALL_T, `${fmt(W)}cm`, { ...lab, dy: -10 });
+      h += T(-WALL_T, D / 2, `${fmt(D)}cm`, { ...lab, dx: -8, anchor: 'end' });
+    } else {
+      // 自由な形: 辺ごとに、中点の外側へ「①360cm」(画面上で短すぎる辺は省く)
+      roomEdges(r).forEach((e, i) => {
+        if (e.len * s < 28) return;
+        const ox = -e.n.x, oy = -e.n.y;
+        const mx = (e.a.x + e.b.x) / 2 + ox * WALL_T, my = (e.a.y + e.b.y) / 2 + oy * WALL_T;
+        const anchor = Math.abs(ox) > 0.5 ? (ox > 0 ? 'start' : 'end') : 'middle';
+        h += T(mx, my, `${circled(i)}${fmt(e.len)}cm`, { ...lab, dx: ox * 8, dy: oy * 10, anchor });
+      });
     }
   }
   h += '</g>';
@@ -1086,12 +1263,23 @@ function fitView() {
   const r = room(), { w, h } = stageSize();
   view.w = w; view.h = h;
   if (w < 10 || h < 10) return;
-  // 寸法ラベルが出る側(長方形は左・上。三角形は直角の位置しだい)だけ広めに余白を取る
-  const ls = labelSides(r), m = { l: ls.v === 'left' ? 64 : 16, r: ls.v === 'right' ? 64 : 16, t: ls.h === 'top' ? 36 : 16, b: ls.h === 'bottom' ? 36 : 16 };
-  const aw = w - m.l - m.r, ah = h - m.t - m.b, RW = r.width + 2 * WALL_T, RD = r.depth + 2 * WALL_T;
+  // 寸法ラベルが出る側だけ広めに余白を取る(長方形は左・上。自由な形・設計モードは四方)
+  const all4 = isPoly(r) || !!state.design;
+  const m = all4 ? { l: 64, r: 64, t: 36, b: 36 } : { l: 64, r: 16, t: 36, b: 16 };
+  // 合わせる範囲(原点 bx,by と大きさ)。設計モードは下書きの外接長方形(空なら 400×300)
+  let bx = 0, by = 0, BW = r.width, BD = r.depth;
+  if (state.design) {
+    const pts = state.design.pts;
+    if (!pts.length) { BW = 400; BD = 300; } else {
+      const b = polyBox(pts);
+      BW = Math.max(b.w, 200); BD = Math.max(b.d, 150);
+      bx = b.x0 + b.w / 2 - BW / 2; by = b.y0 + b.d / 2 - BD / 2;
+    }
+  }
+  const aw = w - m.l - m.r, ah = h - m.t - m.b, RW = BW + 2 * WALL_T, RD = BD + 2 * WALL_T;
   view.s = clamp(Math.min(aw / RW, ah / RD), 0.05, 20);
-  view.tx = m.l + WALL_T * view.s + (aw - RW * view.s) / 2;
-  view.ty = m.t + WALL_T * view.s + (ah - RD * view.s) / 2;
+  view.tx = m.l + (WALL_T - bx) * view.s + (aw - RW * view.s) / 2;
+  view.ty = m.t + (WALL_T - by) * view.s + (ah - RD * view.s) / 2;
   state.fitMode = true;
   requestRender();
 }
@@ -1142,6 +1330,17 @@ stage.addEventListener('pointerdown', (e) => {
   ptrs.set(e.pointerId, localPt(e));
   if (ptrs.size === 2) { startPinch(); return; }
   if (ptrs.size > 2) return;
+  if (state.design) {   // 設計モード: 当たりは座標からの距離で判定する(#stage の子は pointer-events:none)
+    const g = { design: true, sx: e.clientX, sy: e.clientY, moved: false, tx0: view.tx, ty0: view.ty };
+    const a = document.activeElement;
+    if (a && panelBody.contains(a) && (a.tagName === 'INPUT' || a.tagName === 'SELECT')) { a.blur(); g.blurOnly = true; }   // 入力中の最初のタップは確定だけ
+    else {
+      g.hit = designHit(localPt(e));
+      if (g.hit && g.hit.type === 'vtx' && state.design.closed) { const q = state.design.pts[g.hit.i]; g.vtx = g.hit.i; g.ox = q.x; g.oy = q.y; }
+    }
+    gesture = g;
+    return;
+  }
   const hit = e.target.closest && e.target.closest('[data-furn],[data-item]');
   const g = { id: hit ? (hit.dataset.furn || hit.dataset.item) : null, sx: e.clientX, sy: e.clientY, moved: false, tx0: view.tx, ty0: view.ty };
   // パネルで入力中に配置図の空き部分をタップしたときは、入力を確定してキーボードを閉じるだけにし、選択は外さない
@@ -1165,8 +1364,20 @@ stage.addEventListener('pointermove', (e) => {
   if (!g) return;
   const dx = e.clientX - g.sx, dy = e.clientY - g.sy;
   if (!g.moved && Math.hypot(dx, dy) < 4) return;
+  const first = !g.moved;
   g.moved = true;
-  if (g.drag) {
+  if (g.design && g.vtx != null && state.design) {   // 設計モード: 頂点のドラッグ
+    const d = state.design, n = d.pts.length, i = g.vtx;
+    if (first) {
+      designPush();
+      d.done.delete(i); d.done.delete((i - 1 + n) % n);   // 両隣の辺は長さが変わるので入力済みを外す
+      d.sel = i;
+    }
+    const w = { x: g.ox + dx / view.s, y: g.oy + dy / view.s };
+    const q = designSnap(w, [d.pts[(i - 1 + n) % n], d.pts[(i + 1) % n]]);
+    d.pts[i].x = q.x; d.pts[i].y = q.y;
+    requestRender();
+  } else if (g.drag) {
     const f = findAny(g.id), r = room();
     if (g.item) {
       // 小物は細かく置きたいので 1cm 単位。絶対位置で部屋の外に出すぎないよう制限してから相対位置に戻す
@@ -1194,6 +1405,14 @@ function endPointer(e) {
   const g = gesture;
   gesture = null;
   if (!g) return;
+  if (g.design) {
+    if (state.design) {
+      if (!g.moved && !g.blurOnly) designTap(localPt(e), g.hit);
+      else if (g.moved && g.vtx != null) designRefresh();   // ドラッグ終了: パネルの長さを更新
+    }
+    syncSize();
+    return;
+  }
   state.dragging = false;
   if (!g.moved && !g.id && !g.keepSel) deselect();
   if (g.moved && g.drag) {
@@ -1208,6 +1427,16 @@ stage.addEventListener('pointercancel', endPointer);
 stage.addEventListener('lostpointercapture', endPointer);
 
 function startPinch() {
+  if (gesture && gesture.design) {   // 設計モード: 頂点のドラッグ途中なら元の位置に戻す(積んだ「元に戻す」も取り消す)
+    const d = state.design;
+    if (d && gesture.vtx != null && gesture.moved) designUndo();
+    gesture = null;
+    const [a, b] = [...ptrs.values()];
+    const dd = Math.hypot(a.x - b.x, a.y - b.y) || 1, c = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    pinch = { d0: dd, s0: view.s, wx: (c.x - view.tx) / view.s, wy: (c.y - view.ty) / view.s };
+    requestRender();
+    return;
+  }
   if (gesture && gesture.drag && gesture.moved) {   // ドラッグ途中で2本目の指が触れたら元の位置に戻す
     const f = findAny(gesture.id);
     if (f) { f.x = gesture.ox; f.y = gesture.oy; }
@@ -1266,7 +1495,8 @@ function freeSpot(w, d) {
     const c = box(x, y, w, d);
     if (boxInRoom(c, r) && !obs.some((o) => inter(o, c))) return { x, y };
   }
-  return { x: 0, y: 0 };
+  // 最後の手段: 長方形は左上、自由な形は外接長方形の中央
+  return isPoly(r) ? { x: snapV(r.width / 2 - w / 2), y: snapV(r.depth / 2 - d / 2) } : { x: 0, y: 0 };
 }
 const FURN_COLORS = ['#8fb3d9', '#e0c28f', '#a8d5a2', '#e5a6a6', '#c3b1e1', '#f2d388'];
 const ITEM_COLORS = ['#f2a65a', '#9fd3c7', '#f7d6e0', '#d7ccc8', '#b8d8f0', '#e6e08a'];
@@ -1491,6 +1721,13 @@ const WALL_OPTS = WALLS.map((w) => [w, WALL_LABEL[w] + 'の壁']);
 const SIZE_KEYS = ['w', 'd', 'h', 'width', 'depth'];
 
 function renderPanel() {
+  if (state.design) {   // 設計モード: タブを隠して設計用の内容にする(スマホではシートを開いたまま)
+    tabsEl.innerHTML = '<div class="dtitle">部屋の形を編集</div>';
+    app.classList.add('sheet');
+    app.classList.remove('tall');
+    panelBody.innerHTML = designPanel();
+    return;
+  }
   renderTabs();
   app.classList.toggle('sheet', state.sheet);
   app.classList.toggle('tall', state.tab === 'room' || state.tab === 'file');
@@ -1619,19 +1856,24 @@ function warnTab() {
 
 function roomTab() {
   const r = room(), S = state.data.settings, ro = state.mode !== 'edit';
-  const tri = isTri(r), WALL_OPTS = roomWalls(r).map((w) => [w, WALL_LABEL[w] + 'の壁']);   // 三角形は直角をはさむ2辺だけ
+  const poly = isPoly(r);
+  // ドア・窓の「壁」の選択肢。長方形は上下左右、自由な形は辺の番号(値は文字列にそろえる)
+  const wallSel = (col, o) => (poly
+    ? sel('壁', col, o.id, 'edge', String(o.edge), roomEdges(r).map((e, i) => [String(i), isDiag(e) ? `辺${i + 1}(斜め ${fmt(e.len)}cm)` : `辺${i + 1}(${fmt(e.len)}cm)`]))
+    : sel('壁', col, o.id, 'wall', o.wall, WALL_OPTS));
+  const hingeOpts = poly ? [['left', '始点側(時計回りで手前の角)'], ['right', '終点側(時計回りで先の角)']] : [['left', '始点側(左・上)'], ['right', '終点側(右・下)']];
   const add = (act, label) => (ro ? '' : `<button class="btn" data-act="${act}" style="width:100%;margin-top:8px">${label}</button>`);
   const del = (col, id) => (ro ? '' : `<button class="btn danger" data-act="delItem" data-col="${col}" data-id="${esc(id)}" aria-label="削除">✕</button>`);
   return `<fieldset ${ro ? 'disabled' : ''}><div class="stack">
     <h3>部屋</h3>
     ${fld('部屋名', 'room', r.id, 'name', r.name, { type: 'text' })}
     <div class="grid2">
-      ${sel('形', 'room', r.id, 'shape', r.shape || 'rect', ROOM_SHAPE_OPTS, tri ? '' : 'full')}
-      ${tri ? sel('直角の位置', 'room', r.id, 'corner', r.corner, CORNERS.map((c) => [c, CORNER_LABEL[c]])) : ''}
+      ${sel('形', 'room', r.id, 'shape', poly ? 'poly' : 'rect', ROOM_SHAPE_OPTS, 'full')}
     </div>
-    <div class="grid2">${fld(tri ? '横の辺 (cm)' : '幅 (cm)', 'room', r.id, 'width', r.width)}${fld(tri ? '縦の辺 (cm)' : '奥行き (cm)', 'room', r.id, 'depth', r.depth)}</div>
-    ${tri ? `<p class="note">直角をはさむ2辺の長さを入れます。斜めの辺: <b id="hypLen">${fmt(hypLen(r))}</b> cm(自動)。ドア・窓は斜めの壁には置けません。</p>` : ''}
-    <p class="note">座標は部屋${tri ? 'を囲む長方形' : ''}の内側の左上が原点(0,0)、単位はcmです。</p>
+    ${poly ? `<p style="margin:0">外寸 ${fmt(r.width)} × ${fmt(r.depth)} cm・頂点 ${r.points.length} 個</p>
+    <button class="btn primary" data-act="editShape" style="width:100%">部屋の形を編集</button>`
+    : `<div class="grid2">${fld('幅 (cm)', 'room', r.id, 'width', r.width)}${fld('奥行き (cm)', 'room', r.id, 'depth', r.depth)}</div>`}
+    <p class="note">座標は部屋${poly ? 'を囲む長方形' : ''}の内側の左上が原点(0,0)、単位はcmです。</p>
 
     <h3>固定物(柱・出っ張り)</h3>
     ${r.fixtures.map((o) => `<div class="card"><div class="cardhead"><span>${esc(o.name)}</span>${del('fixtures', o.id)}</div><div class="grid2">
@@ -1642,14 +1884,14 @@ function roomTab() {
 
     <h3>ドア</h3>
     ${r.doors.map((o, i) => `<div class="card"><div class="cardhead"><span>ドア${i + 1}</span>${del('doors', o.id)}</div><div class="grid2">
-      ${sel('壁', 'doors', o.id, 'wall', o.wall, WALL_OPTS)}${sel('種類', 'doors', o.id, 'type', o.type, [['swing', '開き戸'], ['sliding', '引き戸']])}
+      ${wallSel('doors', o)}${sel('種類', 'doors', o.id, 'type', o.type, [['swing', '開き戸'], ['sliding', '引き戸']])}
       ${fld('始点からの距離', 'doors', o.id, 'offset', o.offset)}${fld('幅', 'doors', o.id, 'width', o.width)}
-      ${sel('ヒンジ側', 'doors', o.id, 'hinge', o.hinge, [['left', '始点側(左・上)'], ['right', '終点側(右・下)']])}${sel('開く向き', 'doors', o.id, 'opens', o.opens, [['in', '室内側'], ['out', '室外側']])}</div></div>`).join('')}
+      ${sel('ヒンジ側', 'doors', o.id, 'hinge', o.hinge, hingeOpts)}${sel('開く向き', 'doors', o.id, 'opens', o.opens, [['in', '室内側'], ['out', '室外側']])}</div></div>`).join('')}
     ${add('addDoor', '＋ ドアを追加')}
 
     <h3>窓</h3>
     ${r.windows.map((o, i) => `<div class="card"><div class="cardhead"><span>窓${i + 1}</span>${del('windows', o.id)}</div><div class="grid2">
-      ${sel('壁', 'windows', o.id, 'wall', o.wall, WALL_OPTS)}${fld('下端の高さ(掃き出し窓は0)', 'windows', o.id, 'sill', o.sill)}
+      ${wallSel('windows', o)}${fld('下端の高さ(掃き出し窓は0)', 'windows', o.id, 'sill', o.sill)}
       ${fld('始点からの距離', 'windows', o.id, 'offset', o.offset)}${fld('幅', 'windows', o.id, 'width', o.width)}</div></div>`).join('')}
     ${add('addWindow', '＋ 窓を追加')}
 
@@ -1660,7 +1902,7 @@ function roomTab() {
     </div>
     <p class="note">すき間が「通れない幅」未満なら赤、「通路の目安」未満なら黄。「無視するすき間」以下は壁際の余白とみなして判定しません。</p>
   </div></fieldset>
-  <p class="note">ドアの「始点」は、上・下の壁では左端、左・右の壁では上端です。</p>`;
+  <p class="note">${poly ? '辺の番号は配置図の①②…です。ドア・窓の「始点」は、辺の両端のうち時計回りで手前の角です。' : 'ドアの「始点」は、上・下の壁では左端、左・右の壁では上端です。'}</p>`;
 }
 
 function fileTab() {
@@ -1699,21 +1941,88 @@ function lookup(col, id) {
   if (col === 'settings') return state.data.settings;
   return (r[col] || []).find((o) => o.id === id);
 }
-/** ドア・窓を壁の長さに収める。部屋を縮めたときに使う。変更があれば true */
+/** ドア・窓を壁(辺)の長さに収める。部屋を縮めたときに使う。変更があれば true */
 function fitOpenings(r) {
   let moved = false;
   for (const o of [...r.doors, ...r.windows]) {
-    const len = wallLen(r, o.wall), width = Math.min(o.width, len), offset = clamp(o.offset, 0, Math.max(0, len - width));
+    const len = openingEdge(r, o).len, width = Math.min(o.width, len), offset = clamp(o.offset, 0, Math.max(0, len - width));
     if (width !== o.width || offset !== o.offset) { o.width = width; o.offset = offset; moved = true; }
   }
   return moved;
 }
+/** 形を変える前に、各ドア・窓の両端の絶対座標(p0 が始点側)とヒンジ側の端を控える */
+function openingSnap(r) {
+  return [...r.doors, ...r.windows].map((o) => {
+    const e = openingEdge(r, o);
+    const p0 = { x: e.a.x + e.u.x * o.offset, y: e.a.y + e.u.y * o.offset };
+    const p1 = { x: p0.x + e.u.x * o.width, y: p0.y + e.u.y * o.width };
+    return { o, p0, p1, hingeAt0: o.hinge !== 'right', edge: isPoly(r) ? o.edge : null };
+  });
+}
+/**
+ * 形を変えたあと、控え(openingSnap)をもとにドア・窓を新しい辺(壁)へ付け替える。
+ * km = { ks, nOld }(設計モードの完了時): 新しい辺の両端が元の頂点 j と j+1 なら、元の辺 j のドア・窓はその辺に残す(ヒンジは保ち、位置は射影で決める)。
+ * それ以外は位置で決める: 区間の中点にいちばん近い辺を選び、両端をその辺に射影する。
+ * 中点から辺までが 1cm を超えた、または幅を縮めたものがあれば true(呼び出し側で確認を促す)
+ */
+function remapOpenings(r, snap, km) {
+  const poly = isPoly(r);
+  const cands = poly
+    ? roomEdges(r).map((e, i) => ({ a: e.a, u: e.u, len: e.len, edge: i }))
+    : WALLS.map((w) => ({ ...openingEdge(r, { wall: w }), wall: w }));
+  const setTo = (o, c) => {
+    if (poly) { o.edge = c.edge; delete o.wall; } else { o.wall = c.wall; delete o.edge; }
+  };
+  let warn = false;
+  for (const s of snap) {
+    const o = s.o;
+    if (km && poly && s.edge != null) {
+      const n = km.ks.length, j1 = (s.edge + 1) % km.nOld;
+      const i = km.ks.findIndex((k, ii) => k === s.edge && km.ks[(ii + 1) % n] === j1);
+      if (i >= 0) {
+        // 同じ辺に残す。位置は元の始点側の端を辺に射影して決める(辺の始点の角が動いても、部屋の中での位置がずれない)。ヒンジは変えない
+        const c = cands[i], w = Math.min(o.width, c.len);
+        if (w < o.width - EPS) warn = true;
+        setTo(o, c);
+        o.width = w; o.offset = clamp(round1(projT(c, s.p0)), 0, Math.max(0, c.len - w));
+        continue;
+      }
+    }
+    const m = { x: (s.p0.x + s.p1.x) / 2, y: (s.p0.y + s.p1.y) / 2 };
+    let best = null, bd = Infinity;
+    for (const c of cands) {
+      const d = segDist(m, c.a, { x: c.a.x + c.u.x * c.len, y: c.a.y + c.u.y * c.len });
+      if (d < bd - EPS) { bd = d; best = c; }
+    }
+    if (!best) continue;
+    const proj = (p) => projT(best, p);
+    const t0 = proj(s.p0), t1 = proj(s.p1), w = Math.min(o.width, best.len);
+    if (bd > 1 || w < o.width - EPS) warn = true;
+    const max = Math.max(0, best.len - w);
+    if (Math.abs(t1 - t0) < 1) {
+      // 辺とほぼ直角で、射影すると1点に縮む: ヒンジは保ち、射影位置を中心に置く
+      o.offset = clamp(round1((t0 + t1) / 2 - w / 2), 0, max);
+    } else {
+      o.offset = clamp(round1(Math.min(t0, t1)), 0, max);
+      if ('hinge' in o) o.hinge = (s.hingeAt0 ? t0 : t1) <= (t0 + t1) / 2 ? 'left' : 'right';
+    }
+    o.width = w;
+    setTo(o, best);
+  }
+  return warn;
+}
+/** 点 p を辺 c(a・u)へ射影した、始点からの距離 */
+const projT = (c, p) => c.u.x * (p.x - c.a.x) + c.u.y * (p.y - c.a.y);
 function applyField(t, commit) {
   if (state.mode !== 'edit') return;
   const { col, id, key } = t.dataset;
+  if (col === 'room' && key === 'shape') { changeRoomShape(t.value); return; }   // 形の切り替えは専用の処理(控え → 変換 → 付け替え)
   const obj = lookup(col, id);
   if (!obj) return;
-  if (t.type === 'number') {
+  if ((col === 'doors' || col === 'windows') && key === 'edge') {
+    // select の値は文字列なので辺の番号(整数)に直す
+    obj.edge = clamp(Math.round(Number(t.value)) || 0, 0, roomPoly(room()).length - 1);
+  } else if (t.type === 'number') {
     // 寸法は入力途中の値(120 と打つ途中の 1 など)で家具や部屋が縮んで消えて見えないよう、確定時だけ反映する。
     // 空欄のまま確定したら元の値に戻る
     if (!commit && SIZE_KEYS.includes(key)) return;
@@ -1733,28 +2042,21 @@ function applyField(t, commit) {
     if (key === 'shape') rerender = true;         // 形が変わると入力欄の構成も変わる
   }
   if (col === 'items' && key === 'on') rerender = true;
-  if ((col === 'doors' || col === 'windows') && (commit || t.tagName === 'SELECT') && ['offset', 'width', 'wall'].includes(key)) {
-    const len = wallLen(room(), obj.wall);
+  if ((col === 'doors' || col === 'windows') && (commit || t.tagName === 'SELECT') && ['offset', 'width', 'wall', 'edge'].includes(key)) {
+    const len = openingEdge(room(), obj).len;
     obj.width = Math.min(obj.width, len);
     const off = clamp(obj.offset, 0, Math.max(0, len - obj.width));
     if (off !== obj.offset) { obj.offset = off; rerender = true; }
   }
   if (col === 'room') {
     if (key === 'name') updateChrome();
-    else if (key === 'shape' || key === 'corner') {
-      // 形・直角の位置が変わると、置ける壁・入力欄のラベル・寸法の出る側が変わる
-      if (fixOpeningWalls(obj)) toast('斜めの壁の側にあったドア・窓を、向かいの壁へ移しました');
-      rerender = true;
-      fitView();
-    } else {
+    else {
       if (commit && fitOpenings(obj)) rerender = true;   // 入力途中の値では動かさず、確定時だけ収める
       fitView();
     }
   }
   if (col === 'settings' && commit && key === 'aisleTight' && obj.aisleTight > obj.aisleMin) { obj.aisleMin = obj.aisleTight; rerender = true; }
   changed({ panel: 'none' });
-  const hl = $('#hypLen');
-  if (hl && col === 'room') hl.textContent = fmt(hypLen(obj));
   if (commit && t.type === 'number' && !rerender) t.value = obj[key];
   if (rerender) renderPanel();
 }
@@ -1774,6 +2076,364 @@ function syncInputs() {
 }
 
 /* =====================================================================
+ * 部屋の形の切り替え・部屋設計モード
+ * ===================================================================== */
+/** 自由な形の部屋で、いちばん長い辺に幅 w のドア・窓を置く位置 */
+function longestEdgeSpot(r, w) {
+  const es = roomEdges(r);
+  let i = 0;
+  es.forEach((e, k) => { if (e.len > es[i].len + EPS) i = k; });
+  const len = es[i].len, width = Math.min(w, len);
+  return { edge: i, offset: round1(Math.max(0, Math.min(20, len - width))), width: round1(width) };
+}
+/** 部屋タブの「形」の切り替え。長方形 → 自由な形は4隅を頂点にして設計モードへ。自由な形 → 長方形は外寸の長方形に戻す */
+function changeRoomShape(v) {
+  const r = room();
+  if (state.mode !== 'edit' || state.locked || state.design) { renderPanel(); return; }
+  const cur = isPoly(r) ? 'poly' : 'rect';
+  if (v === cur) return;
+  let warn;
+  if (v === 'poly') {
+    const snap = openingSnap(r);
+    r.shape = 'poly';
+    r.points = roomPoly({ width: r.width, depth: r.depth }).map((p) => ({ ...p }));
+    warn = remapOpenings(r, snap);
+    changed({ panel: 'none' });
+    enterDesign();
+  } else {
+    if (!confirm('外寸の長方形に戻します。斜めの辺やへこみはなくなります。よろしいですか?')) { renderPanel(); return; }
+    const snap = openingSnap(r);
+    r.shape = 'rect';
+    delete r.points;
+    r.width = clamp(r.width, ...LIM['room.width']); r.depth = clamp(r.depth, ...LIM['room.depth']);
+    warn = remapOpenings(r, snap);
+    fitOpenings(r);
+    fitView();
+    changed({ panel: 'full' });
+  }
+  if (warn) toast('ドア・窓の位置を確認してください');
+}
+
+/** 設計モードに入る(編集モードで、自由な形の部屋のときだけ) */
+function enterDesign() {
+  const r = room();
+  if (state.mode !== 'edit' || state.locked || !isPoly(r)) return;
+  state.selId = null; state.focusKey = null; state.dragging = false;
+  state.design = {
+    pts: r.points.map((p, i) => ({ x: p.x, y: p.y, k: i })),   // k は元の頂点番号(新しく足した頂点は null)
+    closed: true, sel: null, done: new Set(), undo: [], nOld: r.points.length,
+  };
+  state.sheet = true;
+  updateChrome(); renderPanel(); syncSize(); fitView();
+}
+function cancelDesign() {
+  if (!state.design) return;
+  state.design = null;
+  updateChrome(); renderPanel(); syncSize(); fitView();
+}
+/** 完了: 向きを時計回りにそろえ、ドア・窓を付け替えてから、左上を (0,0) に寄せる */
+function finishDesign() {
+  const d = state.design, r = room();
+  if (!d || state.mode !== 'edit' || state.locked || designProblem()) return;
+  let pts = d.pts.map((p) => ({ x: round1(p.x), y: round1(p.y) })), ks = d.pts.map((p) => p.k);
+  if (polyArea(pts) < 0) { pts = pts.reverse(); ks = ks.reverse(); }
+  const snap = openingSnap(r);
+  r.shape = 'poly';
+  r.points = pts;
+  const warn = remapOpenings(r, snap, { ks, nOld: d.nOld });
+  shiftToOrigin(r);
+  fitOpenings(r);
+  state.design = null;
+  updateChrome();
+  fitView();
+  changed({ panel: 'full' });
+  if (warn) toast('ドア・窓の位置を確認してください');
+}
+/** 下書きが完了できない理由(なければ null) */
+function designProblem() {
+  const d = state.design;
+  if (!d.closed) return d.pts.length < 3 ? '角を3つ以上置いてください' : '最初の角をタップして形を閉じてください';
+  return polyProblem(d.pts);
+}
+
+/* ---- 元に戻す(下書きのスナップショット。最大30) ---- */
+function designPush() {
+  const d = state.design;
+  d.undo.push({ pts: d.pts.map((p) => ({ ...p })), closed: d.closed, sel: d.sel, done: [...d.done] });
+  if (d.undo.length > 30) d.undo.shift();
+}
+function designRestore(s) {
+  const d = state.design;
+  d.pts = s.pts; d.closed = s.closed; d.sel = s.sel; d.done = new Set(s.done);
+}
+function designUndo() {
+  const d = state.design, s = d && d.undo.pop();
+  if (!s) return;
+  designRestore(s);
+  designRefresh();
+}
+/**
+ * 頂点の並びを差し替えたあと、入力済みの辺(done)と選択中の頂点(sel)の番号を振り直す。
+ * 両端の頂点(オブジェクト)が新しい並びでも隣どうしのままの辺だけ、入力済みとして残す
+ */
+function designReindex(oldPts, newPts) {
+  const d = state.design, n0 = oldPts.length, n1 = newPts.length, done = new Set();
+  for (const j of d.done) {
+    const a = oldPts[j], b = oldPts[(j + 1) % n0], i = newPts.indexOf(a);
+    if (i >= 0 && newPts[(i + 1) % n1] === b) done.add(i);
+  }
+  d.done = done;
+  d.sel = d.sel == null ? null : (newPts.indexOf(oldPts[d.sel]) >= 0 ? newPts.indexOf(oldPts[d.sel]) : null);
+}
+function designDeleteVertex() {
+  const d = state.design;
+  if (!d || !d.closed || d.pts.length < 4 || d.sel == null) return;
+  designPush();
+  const old = d.pts, np = old.filter((_, i) => i !== d.sel);
+  d.sel = null;
+  designReindex(old, np);
+  d.pts = np;
+  designRefresh();
+}
+function designRestart() {
+  const d = state.design;
+  if (!d) return;
+  designPush();
+  d.pts = []; d.closed = false; d.sel = null; d.done = new Set();
+  designRefresh();   // 表示位置はそのまま(薄く出している家具をなぞれるように)
+}
+/** 辺 i の中点に頂点を足す */
+function designInsert(i) {
+  const d = state.design, old = d.pts, a = old[i], b = old[(i + 1) % old.length];
+  if (old.length >= POLY_MAX) { toast(`角は${POLY_MAX}個までです`); return; }
+  designPush();
+  const np = old.slice(), v = { x: snapV((a.x + b.x) / 2), y: snapV((a.y + b.y) / 2), k: null };
+  np.splice(i + 1, 0, v);
+  designReindex(old, np);
+  d.pts = np;
+  d.sel = i + 1;
+  designRefresh();
+}
+/** 下書きが変わったら配置図とパネルを描き直す。入力欄のフォーカスは、描き直したあとも同じ辺の欄に戻す */
+function designRefresh() {
+  requestRender();
+  const a = document.activeElement, k = a && a.dataset ? a.dataset.dedge : undefined;
+  renderPanel();
+  if (k != null) { const el = panelBody.querySelector(`[data-dedge="${k}"]`); if (el) el.focus(); }
+}
+
+/** 辺の向き: 'h'(水平)・'v'(垂直)・'d'(斜め) */
+function edgeKind(a, b) {
+  if (Math.abs(b.y - a.y) < 0.01) return 'h';
+  if (Math.abs(b.x - a.x) < 0.01) return 'v';
+  return 'd';
+}
+/**
+ * 軸平行の辺 i の長さを L にする。辺の向きに沿って頂点をずらし、変化はどこかの辺に吸収させる。
+ * 前向き: i+1 から順にずらし、次の辺がこの向きと垂直なら次の頂点もずらす。垂直でない辺(平行 or 斜め)で止まり、その辺が吸収する。
+ * 後ろ向き: i から逆順に同様。吸収する辺は「斜め」>「未入力の平行な辺」>「入力済みの平行な辺」の順に良く、同じなら前向き。
+ * 戻り値: 'ok' / 'none'(吸収する辺がない)/ 'bad'(形がくずれるので元に戻した)/ 'skip'(軸平行でない)
+ */
+function setEdgeLen(i, L) {
+  const d = state.design, P = d.pts, n = P.length;
+  const a = P[i], b = P[(i + 1) % n], kind = edgeKind(a, b);
+  if (kind === 'd') return 'skip';
+  const cur = kind === 'h' ? Math.abs(b.x - a.x) : Math.abs(b.y - a.y);
+  L = clamp(L, 1, 3000);
+  const delta = L - cur;
+  if (Math.abs(delta) < 0.05) { d.done.add(i); return 'ok'; }   // 実測どおり: 頂点は動かさず ✓ だけ付ける
+  const dir = kind === 'h' ? { x: Math.sign(b.x - a.x), y: 0 } : { x: 0, y: Math.sign(b.y - a.y) };
+  const perp = (e0, e1) => (kind === 'h' ? edgeKind(e0, e1) === 'v' : edgeKind(e0, e1) === 'h');
+  /** step=+1 は前向き、-1 は後ろ向き。ずらす頂点と吸収する辺を返す(なければ null) */
+  const walk = (step) => {
+    const moved = [];
+    let v = step > 0 ? (i + 1) % n : i;
+    for (let c = 0; c < n; c++) {
+      moved.push(v);
+      const w = (v + step + n) % n;   // 次の頂点
+      const e = step > 0 ? v : w;      // v と w を結ぶ辺の番号
+      if (e === i) return null;        // 一周した
+      if (!perp(P[v], P[w])) {
+        const k = edgeKind(P[e], P[(e + 1) % n]);
+        return { moved, absorb: e, rank: k === 'd' ? 0 : d.done.has(e) ? 2 : 1 };
+      }
+      v = w;
+    }
+    return null;
+  };
+  const fw = walk(1), bw = walk(-1);
+  const pick = fw && (!bw || fw.rank <= bw.rank) ? { ...fw, sg: 1 } : bw ? { ...bw, sg: -1 } : null;
+  if (!pick) return 'none';
+  const before = polyProblem(P);
+  designPush();
+  for (const v of pick.moved) {
+    P[v].x += dir.x * delta * pick.sg;
+    P[v].y += dir.y * delta * pick.sg;
+  }
+  if (!before && polyProblem(P)) { designRestore(d.undo.pop()); return 'bad'; }
+  d.done.add(i);
+  if (pick.absorb !== i) d.done.delete(pick.absorb);
+  return 'ok';
+}
+
+/** 吸着: 設定の単位に丸め、前後の頂点と x(y)の差が画面上12px以内ならそろえる(辺が水平・垂直になる) */
+function designSnap(p, nbrs) {
+  let x = snapV(p.x), y = snapV(p.y);
+  const th = 12 / view.s;
+  let bx = th, by = th;
+  for (const q of nbrs) {
+    if (!q) continue;
+    if (Math.abs(p.x - q.x) <= bx) { bx = Math.abs(p.x - q.x); x = q.x; }
+    if (Math.abs(p.y - q.y) <= by) { by = Math.abs(p.y - q.y); y = q.y; }
+  }
+  return { x, y };
+}
+/** ポインタ位置(stage 内の px)から当たりを探す。頂点 → 「＋」の順(半径は画面上22px) */
+function designHit(p) {
+  const d = state.design, R = 22;
+  const scr = (q) => ({ x: q.x * view.s + view.tx, y: q.y * view.s + view.ty });
+  let best = null, bd = R;
+  d.pts.forEach((q, i) => { const s = scr(q), dd = Math.hypot(s.x - p.x, s.y - p.y); if (dd <= bd) { bd = dd; best = { type: 'vtx', i }; } });
+  if (best || !d.closed) return best;
+  d.pts.forEach((q, i) => {
+    const b = d.pts[(i + 1) % d.pts.length], s = scr({ x: (q.x + b.x) / 2, y: (q.y + b.y) / 2 }), dd = Math.hypot(s.x - p.x, s.y - p.y);
+    if (dd <= bd) { bd = dd; best = { type: 'plus', i }; }
+  });
+  return best;
+}
+/** 動かさずに離したタップ */
+function designTap(p, hit) {
+  const d = state.design, w = { x: (p.x - view.tx) / view.s, y: (p.y - view.ty) / view.s };
+  if (!d.closed) {
+    if (hit && hit.type === 'vtx') {
+      if (hit.i === 0 && d.pts.length >= 3) { designPush(); d.closed = true; d.sel = null; designRefresh(); }
+      return;   // 他の頂点の上には置かない(長さ0の辺になる)
+    }
+    if (d.pts.length >= POLY_MAX) { toast(`角は${POLY_MAX}個までです`); return; }
+    designPush();
+    const q = designSnap(w, [d.pts[d.pts.length - 1], d.pts[0]]);
+    d.pts.push({ x: q.x, y: q.y, k: null });
+    designRefresh();
+    return;
+  }
+  if (hit && hit.type === 'vtx') d.sel = hit.i;
+  else if (hit && hit.type === 'plus') { designInsert(hit.i); return; }
+  else d.sel = null;
+  designRefresh();
+}
+
+/** 設計モードの配置図: グリッド・薄い家具・下書きの多角形・頂点・辺の長さ・「＋」 */
+function designMarkup() {
+  const r = room(), d = state.design, s = view.s, inv = 1 / s, ns = 'vector-effect="non-scaling-stroke"';
+  const { w: vw, h: vh } = view.w > 10 ? view : stageSize();
+  let h = `<g transform="translate(${view.tx} ${view.ty}) scale(${s})">`;
+  // グリッド(見えている範囲全体)。細かすぎるときは間引く
+  const x0 = -view.tx * inv, x1 = (vw - view.tx) * inv, y0 = -view.ty * inv, y1 = (vh - view.ty) * inv;
+  let step = 50;
+  while (step * s < 6) step *= 2;
+  const major = Math.max(100, step * 2);
+  for (let x = Math.ceil(x0 / step) * step; x <= x1; x += step) h += `<line x1="${x}" y1="${y0}" x2="${x}" y2="${y1}" stroke="${x % major === 0 ? '#c3c8d0' : '#dde1e6'}" stroke-width="1" ${ns}/>`;
+  for (let y = Math.ceil(y0 / step) * step; y <= y1; y += step) h += `<line x1="${x0}" y1="${y}" x2="${x1}" y2="${y}" stroke="${y % major === 0 ? '#c3c8d0' : '#dde1e6'}" stroke-width="1" ${ns}/>`;
+  const P = d.pts, n = P.length;
+  if (d.closed && n >= 3) h += `<path d="${polyD(P)}" fill="#fff" fill-opacity=".85" stroke="#5f6368" stroke-width="3" stroke-linejoin="round" ${ns}/>`;
+  else if (n >= 2) h += `<path d="M${P.map((q) => `${q.x} ${q.y}`).join('L')}" fill="none" stroke="#5f6368" stroke-width="3" stroke-linejoin="round" ${ns}/>`;
+  // 今の家具・固定物を薄く(操作はできない。クラスや data 属性は付けない)
+  for (const x of r.fixtures) h += `<rect x="${x.x}" y="${x.y}" width="${x.w}" height="${x.d}" fill="#cfd3d9" fill-opacity=".5" stroke="#9aa0a8" stroke-width="1" ${ns}/>`;
+  for (const f of r.furniture) {
+    const R = fRect(f), at = `fill="${f.color}" fill-opacity=".3" stroke="#9aa0a8" stroke-width="1" ${ns}`;
+    h += R.round ? `<ellipse cx="${R.x0 + R.w / 2}" cy="${R.y0 + R.d / 2}" rx="${R.w / 2}" ry="${R.d / 2}" ${at}/>` : `<rect x="${R.x0}" y="${R.y0}" width="${R.w}" height="${R.d}" ${at}/>`;
+  }
+  // 辺の長さラベルと「＋」
+  const m = d.closed ? n : n - 1, sg = d.closed && polyArea(P) < 0 ? -1 : 1;
+  for (let i = 0; i < m; i++) {
+    const a = P[i], b = P[(i + 1) % n], len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len < EPS) continue;
+    const ux = (b.x - a.x) / len, uy = (b.y - a.y) / len, ox = uy * sg, oy = -ux * sg;   // 外側(時計回りなら左手側)
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2, kind = edgeKind(a, b);
+    if (len * s >= 24) {
+      const anchor = Math.abs(ox) > 0.5 ? (ox > 0 ? 'start' : 'end') : 'middle';
+      const col = kind === 'd' ? '#8a5a00' : d.done.has(i) ? '#2e7d32' : '#333';
+      h += T(mx, my, `${circled(i)}${kind === 'd' ? '斜め' : ''}${fmt(len)}${d.done.has(i) ? '✓' : ''}`, { px: 12, bold: true, fill: col, dx: ox * 16, dy: oy * 16, anchor });
+    }
+    if (d.closed) h += `<g transform="translate(${mx} ${my}) scale(${inv})"><circle r="9" fill="#fff" stroke="${BLUE}" stroke-width="1.5"/><path d="M-4.5 0H4.5M0 -4.5V4.5" stroke="${BLUE}" stroke-width="2"/></g>`;
+  }
+  // 頂点(番号つき)。閉じる前は、最初の角を緑で示す(タップで閉じる)
+  P.forEach((q, i) => {
+    const on = d.sel === i, first = !d.closed && i === 0 && n >= 3;
+    const fill = on ? BLUE : first ? '#2e7d32' : '#fff', tc = on || first ? '#fff' : '#222';
+    h += `<g transform="translate(${q.x} ${q.y}) scale(${inv})"><circle r="9" fill="${fill}" stroke="${on ? '#fff' : '#3c4043'}" stroke-width="1.5"/><text dy=".35em" text-anchor="middle" font-size="10" font-weight="700" fill="${tc}">${i + 1}</text></g>`;
+  });
+  h += '</g>';
+  return h;
+}
+
+/** 設計モードのパネル */
+function designPanel() {
+  const d = state.design, P = d.pts, n = P.length, prob = designProblem();
+  const dirLabel = (a, b) => (edgeKind(a, b) === 'h' ? (b.x > a.x ? '→右へ' : '←左へ') : (b.y > a.y ? '↓下へ' : '↑上へ'));
+  const rows = d.closed ? P.map((a, i) => {
+    const b = P[(i + 1) % n], len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (edgeKind(a, b) === 'd') return `<div class="drow"><span class="dname">辺${i + 1}</span><span class="dauto" style="flex:1">斜め ${fmt(len)}cm(自動)</span></div>`;
+    return `<div class="drow"><span class="dname">辺${i + 1}</span><span class="ddir">${dirLabel(a, b)}</span>
+      <input type="number" inputmode="decimal" step="any" data-dedge="${i}" value="${fmt(len)}" aria-label="辺${i + 1}の長さ(cm)" autocomplete="off"><span>cm</span>
+      <span class="dok">${d.done.has(i) ? '✓' : ''}</span></div>`;
+  }).join('') : '';
+  return `<div class="stack">
+    <p style="margin:0">${d.closed ? '辺の長さを入れて仕上げます。角はドラッグで動かせます。辺の「＋」で角を足せます。' : '配置図をタップして角を順に置きます。最初の角をタップすると閉じます。'}</p>
+    ${d.closed ? `<div class="dlist">${rows}</div>
+    <p class="note" style="margin:0">長さを入れると、つながる辺が一緒に動き、斜めの辺(なければ向かいの辺)が長さの変化を吸収します。✓ は入力済みの辺です。斜めになった辺は、角をドラッグして隣の角にそろえると数値を入れられます。</p>` : ''}
+    <div id="dprob" class="warnbox" style="margin:0">${prob ? esc(prob) : ''}</div>
+    <div class="grid3">
+      <button class="btn" data-act="dUndo" ${d.undo.length ? '' : 'disabled'}>元に戻す</button>
+      <button class="btn" data-act="dDelete" ${d.closed && n >= 4 && d.sel != null ? '' : 'disabled'}>選んだ角を削除</button>
+      <button class="btn" data-act="dRestart">最初から描き直す</button>
+    </div>
+    <div class="grid2">
+      <button class="btn" data-act="dCancel">キャンセル</button>
+      <button class="btn primary" data-act="dDone" ${prob ? 'disabled' : ''}>完了</button>
+    </div>
+  </div>`;
+}
+panelBody.addEventListener('change', (e) => {
+  const k = e.target.dataset && e.target.dataset.dedge;
+  if (k == null || !state.design) return;
+  const v = parseFloat(e.target.value), i = Number(k);
+  if (!Number.isFinite(v)) { designSyncPanel(); return; }
+  const res = setEdgeLen(i, v);
+  if (res === 'bad') toast('その長さにすると形がくずれます');
+  else if (res === 'none') toast('この辺の長さは変えられません(変化を受け止める辺がありません)');
+  requestRender();
+  designSyncPanel();
+});
+/**
+ * 長さ入力のあと、パネルを作り直さずに値・✓・理由・ボタンの状態だけ更新する。
+ * (change は別の場所を押した瞬間の blur で起きるので、作り直すと「完了」などのクリックが失われる。フォーカスも保てる)
+ */
+function designSyncPanel() {
+  const d = state.design;
+  if (!d) return;
+  const P = d.pts, n = P.length, prob = designProblem();
+  panelBody.querySelectorAll('.drow').forEach((row, i) => {
+    const a = P[i], b = P[(i + 1) % n];
+    if (!a || !b) return;
+    const len = Math.hypot(b.x - a.x, b.y - a.y), inp = row.querySelector('input');
+    if (inp) {
+      inp.value = fmt(len);
+      const ok = row.querySelector('.dok');
+      if (ok) ok.textContent = d.done.has(i) ? '✓' : '';
+    } else {
+      const t = row.querySelector('.dauto');
+      if (t) t.textContent = `斜め ${fmt(len)}cm(自動)`;
+    }
+  });
+  const pb = $('#dprob');
+  if (pb) pb.textContent = prob || '';
+  const btn = (a) => panelBody.querySelector(`[data-act="${a}"]`);
+  if (btn('dUndo')) btn('dUndo').disabled = !d.undo.length;
+  if (btn('dDone')) btn('dDone').disabled = !!prob;
+}
+
+/* =====================================================================
  * 変更通知・クロム(上部バーなど)
  * ===================================================================== */
 function changed(o = {}) {
@@ -1790,7 +2450,7 @@ function changed(o = {}) {
 function updateChrome() {
   const r = room(), n = state.warns.length;
   const reds = state.warns.filter((w) => w.level === 'red').length;
-  $('#btnRoom').textContent = `${r.name}(${isTri(r) ? '△' : ''}${fmt(r.width)}×${fmt(r.depth)})`;
+  $('#btnRoom').textContent = state.design ? '部屋の形を編集中' : `${r.name}(${isPoly(r) ? '自由な形 ' : ''}${fmt(r.width)}×${fmt(r.depth)})`;
   const b = $('#badge');
   b.textContent = n ? `⚠ ${n}` : '✓ OK';
   b.className = reds ? 'red' : n ? 'yel' : '';
@@ -1799,7 +2459,9 @@ function updateChrome() {
   app.classList.toggle('edit', !ro);
   app.classList.toggle('view', ro);
   $('#btnMode').textContent = ro ? '✎ 編集する' : '👁 閲覧モード';
-  $('#btnAdd').disabled = ro;
+  $('#btnAdd').disabled = ro || !!state.design;
+  $('#btnMode').disabled = !!state.design;   // 設計モード中は追加・モード切替をしない
+  app.classList.toggle('design', !!state.design);
   const notice = $('#notice');
   notice.classList.toggle('show', state.locked);
   notice.querySelector('span').textContent = '共有リンクの内容を閲覧中です。このブラウザの保存データはまだ変更されていません。';
@@ -1812,7 +2474,7 @@ function updateChrome() {
   bw.setAttribute('aria-pressed', String(state.hideWarn));
   bw.setAttribute('aria-label', state.hideWarn ? '警告を表示する' : '警告を隠す');
   bw.title = state.hideWarn ? '警告を表示する' : '警告を隠す(配置図の斜線・マーク)';
-  $('#rulerHint').hidden = !(state.ruler && !state.selId);
+  $('#rulerHint').hidden = !(state.ruler && !state.selId && !state.design);
   const wt = tabsEl.querySelector('[data-tab="warn"]');
   if (wt) wt.textContent = '警告' + (n ? `(${n})` : '');
 }
@@ -1828,6 +2490,7 @@ function setMode(m) {
     saveNow();
   }
   state.mode = m;
+  state.design = null;
   if (m === 'view') { state.dragging = false; }
   updateChrome();
   renderPanel();
@@ -1945,6 +2608,7 @@ function importJsonFile(file) {
 }
 function replaceData(data) {
   state.data = data;
+  state.design = null;
   state.selId = null; state.focusKey = null;
   if (state.tab === 'furn') state.sheet = false;
   recompute();
@@ -1988,7 +2652,7 @@ function setHideWarn(v) {
 function printSvg(landscape) {
   const r = room(), W = r.width, D = r.depth;
   const vwMax = landscape ? 1000 : 700, vhMax = landscape ? 520 : 720;
-  const ls = labelSides(r), m = { l: ls.v === 'left' ? 56 : 16, r: ls.v === 'right' ? 56 : 16, t: ls.h === 'top' ? 22 : 12, b: ls.h === 'bottom' ? 22 : 12 };
+  const m = isPoly(r) ? { l: 56, r: 56, t: 22, b: 22 } : { l: 56, r: 16, t: 22, b: 12 };   // 寸法ラベルが出る側だけ広めに
   const s = clamp(Math.min((vwMax - m.l - m.r) / (W + 2 * WALL_T), (vhMax - m.t - m.b) / (D + 2 * WALL_T)), 0.05, 20);
   const tx = m.l + WALL_T * s, ty = m.t + WALL_T * s;
   const vw = tx + (W + WALL_T) * s + m.r, vh = ty + (D + WALL_T) * s + m.b;
@@ -2010,7 +2674,7 @@ function buildPrint() {
   const warns = state.warns.map((w) => `<li>${w.level === 'red' ? '✕ ' : '▲ '}${esc(w.text)}</li>`).join('');
   $('#printArea').innerHTML = `
     <h1>${esc(r.name)}</h1>
-    <p class="meta">部屋 ${isTri(r) ? '直角三角形 ' : ''}${fmt(r.width)} × ${fmt(r.depth)} cm${isTri(r) ? `(直角が${CORNER_LABEL[r.corner]}・斜めの辺 ${fmt(hypLen(r))} cm)` : ''} ／ ${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 印刷 ／ 判定: 赤 ${state.warns.filter((w) => w.level === 'red').length} 件・黄 ${state.warns.filter((w) => w.level !== 'red').length} 件</p>
+    <p class="meta">部屋 ${isPoly(r) ? `自由な形(頂点${r.points.length}個・外寸 ${fmt(r.width)} × ${fmt(r.depth)} cm)` : `${fmt(r.width)} × ${fmt(r.depth)} cm`} ／ ${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 印刷 ／ 判定: 赤 ${state.warns.filter((w) => w.level === 'red').length} 件・黄 ${state.warns.filter((w) => w.level !== 'red').length} 件</p>
     <div class="pplan">${printSvg(landscape).replace('<svg ', `<svg style="max-height:${landscape ? 125 : 165}mm" `)}</div>
     <h2>家具(単位 cm)</h2>
     ${furnRows ? `<table><thead><tr><th>名前</th><th>形</th><th>横 × 縦</th><th>高さ</th><th>前方</th><th>位置 X, Y</th></tr></thead><tbody>${furnRows}</tbody></table>` : '<p>なし</p>'}
@@ -2035,11 +2699,14 @@ function toast(msg) {
 /* =====================================================================
  * クリック操作(イベント委譲)
  * ===================================================================== */
+/** 設計モード中に受け付ける操作(タブの切り替え・シートを閉じる・メニューなどは無効) */
+const DESIGN_ACTS = new Set(['fit', 'zoomIn', 'zoomOut', 'toggleText', 'dUndo', 'dDelete', 'dRestart', 'dCancel', 'dDone']);
 document.addEventListener('click', (e) => {
   const tabBtn = e.target.closest('[data-tab]');
-  if (tabBtn) { openTab(tabBtn.dataset.tab); return; }
+  if (tabBtn) { if (!state.design) openTab(tabBtn.dataset.tab); return; }
   const b = e.target.closest('[data-act]');
   if (!b || b.disabled) return;
+  if (state.design && !DESIGN_ACTS.has(b.dataset.act)) return;
   const d = b.dataset, r = room();
   switch (d.act) {
     case 'openRoom': openTab('room'); break;
@@ -2073,18 +2740,26 @@ document.addEventListener('click', (e) => {
       break;
     }
     case 'addFixture': r.fixtures.push({ id: nextId(r.fixtures, 'f'), name: '出っ張り', x: 0, y: 0, w: 30, d: 30 }); changed({ panel: 'full' }); break;
-    case 'addDoor': {   // 三角形では下の壁がないこともあるので、存在する壁に置く
-      const wall = roomWalls(r).includes('bottom') ? 'bottom' : 'top';
-      r.doors.push({ id: nextId(r.doors, 'd'), wall, offset: Math.min(20, Math.max(0, r.width - 80)), width: Math.min(80, r.width), type: 'swing', hinge: 'left', opens: 'in' });
+    case 'addDoor': {   // 長方形は下の壁、自由な形はいちばん長い辺に置く
+      const id = nextId(r.doors, 'd'), base = { type: 'swing', hinge: 'left', opens: 'in' };
+      if (isPoly(r)) r.doors.push({ id, ...longestEdgeSpot(r, 80), ...base });
+      else r.doors.push({ id, wall: 'bottom', offset: Math.min(20, Math.max(0, r.width - 80)), width: Math.min(80, r.width), ...base });
       changed({ panel: 'full' });
       break;
     }
     case 'addWindow': {
-      const wall = roomWalls(r).includes('top') ? 'top' : 'bottom';
-      r.windows.push({ id: nextId(r.windows, 'w'), wall, offset: Math.min(100, Math.max(0, r.width - 100)), width: Math.min(160, r.width), sill: 90 });
+      const id = nextId(r.windows, 'w');
+      if (isPoly(r)) r.windows.push({ id, ...longestEdgeSpot(r, 160), sill: 90 });
+      else r.windows.push({ id, wall: 'top', offset: Math.min(100, Math.max(0, r.width - 100)), width: Math.min(160, r.width), sill: 90 });
       changed({ panel: 'full' });
       break;
     }
+    case 'editShape': enterDesign(); break;
+    case 'dUndo': designUndo(); break;
+    case 'dDelete': designDeleteVertex(); break;
+    case 'dRestart': designRestart(); break;
+    case 'dCancel': cancelDesign(); break;
+    case 'dDone': finishDesign(); break;
     case 'delItem': {
       r[d.col] = r[d.col].filter((o) => o.id !== d.id);
       changed({ panel: 'full' });
@@ -2110,7 +2785,15 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   const tag = (e.target.tagName || '').toLowerCase();
-  if (tag === 'input' || tag === 'select' || tag === 'textarea') return;
+  const typing = tag === 'input' || tag === 'select' || tag === 'textarea';
+  if (state.design) {   // 設計モード: 家具用のショートカットは使わない。Escape は入力中なら確定(blur)だけ、それ以外はキャンセル
+    if (e.key === 'Escape') {
+      if (typing) e.target.blur(); else cancelDesign();
+      e.preventDefault();
+    }
+    return;
+  }
+  if (typing) return;
   const f = selObj();
   if (!f || state.mode !== 'edit') return;
   if (e.ctrlKey || e.metaKey || e.altKey) return;   // Ctrl+R(再読み込み)などブラウザのショートカットを横取りしない
@@ -2138,6 +2821,7 @@ async function loadFromHash() {
   try {
     const data = await decodeShare(location.hash.slice(1));
     state.data = data;
+    state.design = null;
     state.locked = true; state.mode = 'view';
     state.selId = null; state.focusKey = null; state.sheet = false;
     recompute(); updateChrome(); renderPanel(); syncSize(); fitView();
